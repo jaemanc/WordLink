@@ -1,0 +1,196 @@
+[
+  {
+    "id": 1,
+    "difficulty": "easy",
+    "targetWord": "빵",
+    "targetEmoji": "🍞",
+    "initialWords": [
+      {
+        "word": "밀",
+        "emoji": "🌾"
+      },
+      {
+        "word": "물",
+        "emoji": "💧"
+      },
+      {
+        "word": "불",
+        "emoji": "🔥"
+      },
+      {
+        "word": "소금",
+        "emoji": "🧂"
+      }
+    ],
+    "parSteps": 2,
+    "rules": {
+      "물|밀": {
+        "resultWord": "반죽",
+        "emoji": "🥣",
+        "note": "밀을 물과 섞어 반죽했어요."
+      },
+      "반죽|불": {
+        "resultWord": "빵",
+        "emoji": "🍞",
+        "note": "반죽을 구워 빵을 완성했어요."
+      },
+      "밀|불": {
+        "resultWord": "볶은 밀",
+        "emoji": "🌰",
+        "note": "마른 밀을 불에 볶았어요."
+      },
+      "물|소금": {
+        "resultWord": "소금물",
+        "emoji": "🫗",
+        "note": "물에 소금이 녹았어요."
+      }
+    },
+    "acceptedAnswers": []
+  },
+  {
+    "id": 2,
+    "difficulty": "normal",
+    "targetWord": "나침반",
+    "targetEmoji": "🧭",
+    "initialWords": [
+      {
+        "word": "철",
+        "emoji": "⚙️"
+      },
+      {
+        "word": "번개",
+        "emoji": "⚡"
+      },
+      {
+        "word": "실",
+        "emoji": "🧵"
+      },
+      {
+        "word": "나무",
+        "emoji": "🪵"
+      },
+      {
+        "word": "돌",
+        "emoji": "🪨"
+      }
+    ],
+    "parSteps": 4,
+    "rules": {
+      "번개|철": {
+        "resultWord": "자석",
+        "emoji": "🧲",
+        "note": "전류가 흐르며 철이 자화됐어요."
+      },
+      "돌|철": {
+        "resultWord": "철 조각",
+        "emoji": "🔩",
+        "note": "철을 두드려 작은 조각을 떼어냈어요."
+      },
+      "자석|철 조각": {
+        "resultWord": "자침",
+        "emoji": "🪡",
+        "note": "가느다란 철 조각을 자화했어요."
+      },
+      "실|자침": {
+        "resultWord": "나침반",
+        "emoji": "🧭",
+        "note": "실에 매단 자침이 남북을 가리켜요."
+      },
+      "나무|실": {
+        "resultWord": "활",
+        "emoji": "🏹",
+        "note": "나무 양끝에 실을 걸었어요."
+      },
+      "나무|철 조각": {
+        "resultWord": "못",
+        "emoji": "📌",
+        "note": "철 조각을 나무에 박았어요."
+      }
+    },
+    "acceptedAnswers": []
+  },
+  {
+    "id": 3,
+    "difficulty": "hard",
+    "targetWord": "오로라",
+    "targetEmoji": "🌌",
+    "initialWords": [
+      {
+        "word": "빛",
+        "emoji": "💡"
+      },
+      {
+        "word": "공기",
+        "emoji": "💨"
+      },
+      {
+        "word": "구름",
+        "emoji": "☁️"
+      },
+      {
+        "word": "구슬",
+        "emoji": "🔮"
+      },
+      {
+        "word": "코일",
+        "emoji": "➰"
+      }
+    ],
+    "parSteps": 6,
+    "rules": {
+      "공기|빛": {
+        "resultWord": "이온",
+        "emoji": "⚛️",
+        "note": "고에너지 빛이 공기 입자를 이온화했어요."
+      },
+      "구름|빛": {
+        "resultWord": "노을",
+        "emoji": "🌇",
+        "note": "구름에 따뜻한 빛이 퍼졌어요."
+      },
+      "이온|코일": {
+        "resultWord": "전류",
+        "emoji": "⚡",
+        "note": "이온의 흐름이 전류를 만들어요."
+      },
+      "전류|코일": {
+        "resultWord": "자기장",
+        "emoji": "🧲",
+        "note": "코일에 흐르는 전류가 자기장을 만들어요."
+      },
+      "구슬|자기장": {
+        "resultWord": "자기권",
+        "emoji": "🌐",
+        "note": "구슬을 행성으로 생각하면 자기권을 모형으로 나타낼 수 있어요."
+      },
+      "이온|자기권": {
+        "resultWord": "입자 흐름",
+        "emoji": "☄️",
+        "note": "자기장을 따라 하전 입자가 이동해요."
+      },
+      "공기|입자 흐름": {
+        "resultWord": "오로라",
+        "emoji": "🌌",
+        "note": "하전 입자가 대기의 입자와 충돌해 빛나요."
+      },
+      "공기|구름": {
+        "resultWord": "안개",
+        "emoji": "🌫️",
+        "note": "지표 근처 공기에 물방울이 모였어요."
+      },
+      "구슬|빛": {
+        "resultWord": "빛무리",
+        "emoji": "✨",
+        "note": "구슬에서 빛이 산란했어요."
+      },
+      "구름|입자 흐름": {
+        "resultWord": "극광",
+        "emoji": "🌌",
+        "note": "하전 입자가 대기에 빛을 만들어요. 극광은 오로라의 다른 이름이에요."
+      }
+    },
+    "acceptedAnswers": [
+      "극광"
+    ]
+  }
+]
