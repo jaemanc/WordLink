@@ -1,44 +1,71 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wordlink/local_knowledge_service.dart';
+import 'package:wordlink/models.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('every stage has a shortest clear at par', () async {
+  test('all modes clear at par with their fixed card counts', () async {
     final service = await LocalKnowledgeService.load(rootBundle.loadString);
-    expect(service.stages.length, 3);
+    expect(service.stages.map((stage) => stage.difficulty.cardsRequired), [
+      4,
+      8,
+      16,
+    ]);
+
+    expect(service.stages.map((stage) => stage.parSteps), [10, 15, 20]);
     for (final stage in service.stages) {
-      final queue = [(stage.initialWords, 0)];
-      final seen = <String>{};
+      final start = {for (final item in stage.initialWords) item.word: item};
+      final queue = [(start, 0)];
+      final seen = {CombinationRule.key(start.keys)};
       int? shortest;
+
       for (var head = 0; head < queue.length && shortest == null; head++) {
         final (inventory, moves) = queue[head];
-        for (var i = 0; i < inventory.length; i++) {
-          for (var j = i + 1; j < inventory.length; j++) {
-            final outcome = service.craft(stage, inventory[i], inventory[j]);
-            if (outcome.isTargetReached) shortest = moves + 1;
-            final result = outcome.result;
-            if (result == null ||
-                inventory.any((item) => item.word == result.word)) {
-              continue;
-            }
-            final next = [...inventory, result];
-            final words = next.map((item) => item.word).toList()..sort();
-            if (seen.add(words.join('|'))) queue.add((next, moves + 1));
+        for (final key in stage.rules.keys) {
+          final words = key.split('|');
+          if (!words.every(inventory.containsKey)) continue;
+
+          final ingredients =
+              words.reversed.map((word) => inventory[word]!).toList();
+          final outcome = service.craft(stage, ingredients);
+          expect(outcome.ingredients, ingredients);
+          final result = outcome.result!;
+          if (outcome.isTargetReached) shortest = moves + 1;
+          if (inventory.containsKey(result.word)) continue;
+
+          final next = {...inventory, result.word: result};
+          if (seen.add(CombinationRule.key(next.keys))) {
+            queue.add((next, moves + 1));
           }
         }
       }
       expect(shortest, stage.parSteps, reason: stage.difficulty.name);
       expect(service.proximity(stage.targetWord, stage.targetWord), 100);
+
+      expect(
+        () => service.craft(stage, stage.initialWords.skip(1).toList()),
+        throwsArgumentError,
+      );
+      expect(
+        () => service.craft(
+          stage,
+          List.filled(stage.difficulty.cardsRequired, stage.initialWords.first),
+        ),
+        throwsArgumentError,
+      );
     }
 
     final easy = service.stages.first;
-    final [wheat, water, fire, salt] = easy.initialWords;
-    final dough = service.craft(easy, water, wheat);
+    final dough = service.craft(easy, easy.initialWords);
     expect(dough.result?.word, '반죽');
-    expect(dough.proximity, 77);
-    expect(service.craft(easy, dough.result!, fire).isTargetReached, isTrue);
-    expect(service.craft(easy, fire, salt).result, isNull);
+    expect(dough.result?.attribute, WordAttribute.material);
+    expect(dough.hint, contains('밀 → 반죽'));
+    expect(dough.proximity, 38);
+    expect(
+      service.craft(easy, [...easy.initialWords.take(3), dough.result!]).result,
+      isNull,
+    );
   });
 }

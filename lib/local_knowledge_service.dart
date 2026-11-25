@@ -9,7 +9,6 @@ class LocalKnowledgeService {
   final List<Stage> stages;
   final Map<String, List<double>> _unitVectors;
   final _similarities = <(String, String), int>{};
-  final _outcomes = <(int, String, String), CraftOutcome>{};
 
   static Future<LocalKnowledgeService> load(
     Future<String> Function(String) readAsset,
@@ -18,9 +17,10 @@ class LocalKnowledgeService {
       readAsset('assets/stages.json'),
       readAsset('assets/embeddings.json'),
     ]);
-    final stages = (jsonDecode(assets[0]) as List)
-        .map((json) => Stage.fromJson(json as Map<String, dynamic>))
-        .toList();
+    final stages =
+        (jsonDecode(assets[0]) as List)
+            .map((json) => Stage.fromJson(json as Map<String, dynamic>))
+            .toList();
     if (stages.isEmpty ||
         stages.map((stage) => stage.id).toSet().length != stages.length ||
         stages.any((stage) => stage.parSteps < 1)) {
@@ -46,19 +46,18 @@ class LocalKnowledgeService {
         ...stage.initialWords.map((item) => item.word),
         ...stage.rules.values.map((rule) => rule.result.word),
       };
-      if (stage.initialWords.length < 4 ||
-          stage.initialWords.length > 5 ||
+      if (stage.initialWords.length < stage.difficulty.cardsRequired ||
           stage.initialWords.map((item) => item.word).toSet().length !=
               stage.initialWords.length ||
           !words.every(vectors.containsKey)) {
         throw FormatException('스테이지 ${stage.id}의 단어 데이터가 올바르지 않습니다.');
       }
       for (final key in stage.rules.keys) {
-        final pair = key.split('|');
-        if (pair.length != 2 ||
-            pair.first == pair.last ||
-            !pair.every(words.contains) ||
-            key != CombinationRule.key(pair.first, pair.last)) {
+        final ingredients = key.split('|');
+        if (ingredients.length != stage.difficulty.cardsRequired ||
+            ingredients.toSet().length != ingredients.length ||
+            !ingredients.every(words.contains) ||
+            key != CombinationRule.key(ingredients)) {
           throw FormatException('잘못된 조합 키: $key');
         }
       }
@@ -80,24 +79,27 @@ class LocalKnowledgeService {
     });
   }
 
-  CraftOutcome craft(Stage stage, WordItem left, WordItem right) {
-    final pair = CombinationRule.key(left.word, right.word);
-    return _outcomes.putIfAbsent((stage.id, left.word, right.word), () {
-      final rule = stage.rules[pair];
-      final result = rule?.result;
-      return CraftOutcome(
-        left: left,
-        right: right,
-        result: result,
-        note: rule?.note ?? '이 두 단어는 조합할 수 없어요.',
-        proximity: result == null
-            ? null
-            : proximity(result.word, stage.targetWord),
-        isTargetReached:
-            result != null &&
-            (result.word == stage.targetWord ||
-                stage.acceptedAnswers.contains(result.word)),
+  CraftOutcome craft(Stage stage, List<WordItem> ingredients) {
+    final words = ingredients.map((item) => item.word).toSet();
+    if (ingredients.length != stage.difficulty.cardsRequired ||
+        words.length != ingredients.length) {
+      throw ArgumentError(
+        '서로 다른 카드 ${stage.difficulty.cardsRequired}장을 골라야 합니다.',
       );
-    });
+    }
+    final rule = stage.rules[CombinationRule.key(words)];
+    final result = rule?.result;
+    return CraftOutcome(
+      ingredients: List.unmodifiable(ingredients),
+      result: result,
+      note: rule?.note ?? '이 카드들은 조합할 수 없어요.',
+      hint: rule?.hint,
+      proximity:
+          result == null ? null : proximity(result.word, stage.targetWord),
+      isTargetReached:
+          result != null &&
+          (result.word == stage.targetWord ||
+              stage.acceptedAnswers.contains(result.word)),
+    );
   }
 }

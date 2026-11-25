@@ -22,6 +22,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
     duration: const Duration(milliseconds: 420),
   );
   bool _byProximity = false;
+  WordAttribute? _attribute;
   bool _busy = false;
 
   @override
@@ -73,9 +74,10 @@ class _GameScreenState extends ConsumerState<GameScreen>
   Widget build(BuildContext context) {
     final knowledge = ref.watch(knowledgeProvider);
     final game = ref.watch(gameProvider);
-    final motion = MediaQuery.disableAnimationsOf(context)
-        ? Duration.zero
-        : const Duration(milliseconds: 220);
+    final motion =
+        MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 220);
     final controller = ref.read(gameProvider.notifier);
     return Scaffold(
       appBar: AppBar(
@@ -92,24 +94,31 @@ class _GameScreenState extends ConsumerState<GameScreen>
             ),
         ],
       ),
+      bottomNavigationBar:
+          game == null || game.cleared
+              ? null
+              : _craftControls(game, controller),
       body: SafeArea(
         child: knowledge.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, _) => Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('로컬 게임 데이터를 불러오지 못했어요.'),
-                TextButton(
-                  onPressed: () => ref.invalidate(knowledgeProvider),
-                  child: const Text('다시 불러오기'),
+          error:
+              (error, _) => Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('로컬 게임 데이터를 불러오지 못했어요.'),
+                    TextButton(
+                      onPressed: () => ref.invalidate(knowledgeProvider),
+                      child: const Text('다시 불러오기'),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-          data: (service) => game == null
-              ? const SizedBox.shrink()
-              : _play(game, service, controller, motion),
+              ),
+          data:
+              (service) =>
+                  game == null
+                      ? const SizedBox.shrink()
+                      : _play(game, service, controller, motion),
         ),
       ),
     );
@@ -124,7 +133,10 @@ class _GameScreenState extends ConsumerState<GameScreen>
     final colors = Theme.of(context).colorScheme;
     final stage = game.stage;
     int score(WordItem item) => service.proximity(item.word, stage.targetWord);
-    final inventory = [...game.inventory];
+    final inventory =
+        game.inventory
+            .where((item) => _attribute == null || item.attribute == _attribute)
+            .toList();
     if (_byProximity) {
       inventory.sort((a, b) {
         final order = score(b).compareTo(score(a));
@@ -133,6 +145,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
     }
     final best = game.inventory.map(score).reduce(math.max);
     final latest = game.latest;
+    final hinted = game.lastHintedCraft;
     final accent = latest?.result == null ? colors.error : colors.primary;
     final index = service.stages.indexOf(stage);
 
@@ -149,13 +162,16 @@ class _GameScreenState extends ConsumerState<GameScreen>
               children: [
                 for (final option in service.stages)
                   ChoiceChip(
-                    label: Text(option.difficulty.name.toUpperCase()),
+                    label: Text(
+                      '${option.difficulty.name.toUpperCase()} ${option.difficulty.cardsRequired}장',
+                    ),
                     selected: stage.id == option.id,
-                    onSelected: _busy
-                        ? null
-                        : (selected) {
-                            if (selected) controller.start(option);
-                          },
+                    onSelected:
+                        _busy
+                            ? null
+                            : (selected) {
+                              if (selected) controller.start(option);
+                            },
                   ),
               ],
             ),
@@ -167,27 +183,34 @@ class _GameScreenState extends ConsumerState<GameScreen>
                   Text('목표 단어', style: TextStyle(color: colors.primary)),
                   Text(
                     '${stage.targetEmoji}  ${stage.targetWord}',
-                    style: Theme.of(context).textTheme.headlineMedium
-                        ?.copyWith(fontWeight: FontWeight.w900),
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('최고 근접도 $best%'),
-                      Text('${game.moves}회 시도 · 기준 ${stage.parSteps}회'),
-                    ],
+                  SizedBox(
+                    width: double.infinity,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        Text('최고 근접도 $best%'),
+                        Text('${game.moves}회 시도 · 기준 ${stage.parSteps}회'),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TweenAnimationBuilder<double>(
                     tween: Tween(begin: 0, end: best / 100),
                     duration: motion,
-                    builder: (context, progress, _) => LinearProgressIndicator(
-                      value: progress,
-                      minHeight: 8,
-                      borderRadius: BorderRadius.circular(8),
-                      semanticsLabel: '목표 단어 근접도',
-                    ),
+                    builder:
+                        (context, progress, _) => LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 8,
+                          borderRadius: BorderRadius.circular(8),
+                          semanticsLabel: '목표 단어 근접도',
+                        ),
                   ),
                 ],
               ),
@@ -210,27 +233,26 @@ class _GameScreenState extends ConsumerState<GameScreen>
                       return Stack(
                         alignment: Alignment.center,
                         children: [
-                          Row(
-                            children: [
-                              for (var i = 0; i < 2; i++) ...[
-                                if (i == 1)
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                    ),
-                                    child: Icon(Icons.add, size: 20),
-                                  ),
-                                Expanded(
-                                  child: Transform.translate(
-                                    offset: Offset(
-                                      travel * (i == 0 ? 24 : -24),
-                                      0,
-                                    ),
-                                    child: _slot(game, controller, i, motion),
-                                  ),
-                                ),
-                              ],
-                            ],
+                          Transform.scale(
+                            scale: 1 - travel * .13,
+                            child: AnimatedSize(
+                              duration: motion,
+                              alignment: Alignment.topCenter,
+                              child:
+                                  game.selected.isEmpty
+                                      ? Text(
+                                        '보유 단어를 탭해 ${stage.difficulty.cardsRequired}장을 고르세요.',
+                                      )
+                                      : Wrap(
+                                        alignment: WrapAlignment.center,
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        children: [
+                                          for (final item in game.selected)
+                                            _slot(item, controller, motion),
+                                        ],
+                                      ),
+                            ),
                           ),
                           if (_busy && _impact.value >= .28)
                             Positioned.fill(
@@ -247,44 +269,52 @@ class _GameScreenState extends ConsumerState<GameScreen>
                       );
                     },
                   ),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: game.selected.length == 2 && !_busy
-                        ? () => _combine(controller)
-                        : null,
-                    icon: const Icon(Icons.bolt),
-                    label: const Text('조합하기'),
-                  ),
-                  const SizedBox(height: 7),
-                  AnimatedSwitcher(
-                    duration: motion,
-                    child: latest == null
-                        ? const Text(
-                            '인벤토리에서 서로 다른 단어 2개를 탭하세요.',
+                  if (latest != null) ...[
+                    const SizedBox(height: 10),
+                    AnimatedSwitcher(
+                      duration: motion,
+                      child: Column(
+                        key: ValueKey(game.moves),
+                        children: [
+                          Text(
+                            latest.result == null
+                                ? '조합 불가'
+                                : '${latest.result!.emoji} ${latest.result!.word}',
                             textAlign: TextAlign.center,
-                          )
-                        : Column(
-                            key: ValueKey(game.moves),
-                            children: [
-                              Text(
-                                latest.equation,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: accent,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                [
-                                  latest.note,
-                                  if (latest.proximity != null)
-                                    '근접도 ${latest.proximity}%',
-                                ].join(' · '),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
+                            style: TextStyle(
+                              color: accent,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                  ),
+                          Text(
+                            [
+                              latest.note,
+                              if (latest.proximity != null)
+                                '근접도 ${latest.proximity}%',
+                            ].join(' · '),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (!game.cleared && hinted != null) ...[
+                    const SizedBox(height: 8),
+                    if (stage.difficulty == Difficulty.easy)
+                      Text(
+                        '다음 조합 · ${hinted.hint}',
+                        textAlign: TextAlign.center,
+                      )
+                    else
+                      ExpansionTile(
+                        key: ValueKey(hinted.result?.word),
+                        title: const Text('다음 조합 힌트'),
+                        tilePadding: EdgeInsets.zero,
+                        children: [
+                          Text(hinted.hint!, textAlign: TextAlign.center),
+                        ],
+                      ),
+                  ],
                   if (game.cleared) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -299,9 +329,11 @@ class _GameScreenState extends ConsumerState<GameScreen>
                     ),
                     if (index + 1 < service.stages.length)
                       OutlinedButton(
-                        onPressed: _busy
-                            ? null
-                            : () => controller.start(service.stages[index + 1]),
+                        onPressed:
+                            _busy
+                                ? null
+                                : () =>
+                                    controller.start(service.stages[index + 1]),
                         child: const Text('다음 스테이지'),
                       ),
                   ],
@@ -313,7 +345,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
               children: [
                 Expanded(
                   child: Text(
-                    '보유 단어 ${inventory.length}',
+                    '보유 단어 ${game.inventory.length}',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
@@ -331,24 +363,43 @@ class _GameScreenState extends ConsumerState<GameScreen>
                 ),
               ],
             ),
-            LayoutBuilder(
-              builder: (context, constraints) => Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final item in inventory)
-                    SizedBox(
-                      width: (constraints.maxWidth - 16) / 3,
-                      child: _wordCard(
-                        game,
-                        controller,
-                        item,
-                        score(item),
-                        motion,
-                      ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: DropdownButton<WordAttribute>(
+                value: _attribute,
+                hint: const Text('전체 속성'),
+                onChanged:
+                    (attribute) => setState(() => _attribute = attribute),
+                items: [
+                  const DropdownMenuItem(child: Text('전체 속성')),
+                  for (final attribute in WordAttribute.values)
+                    DropdownMenuItem(
+                      value: attribute,
+                      child: Text(attribute.label),
                     ),
                 ],
               ),
+            ),
+            if (inventory.isEmpty) const Text('이 속성의 카드가 아직 없어요.'),
+            LayoutBuilder(
+              builder:
+                  (context, constraints) => Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final item in inventory)
+                        SizedBox(
+                          width: (constraints.maxWidth - 16) / 3,
+                          child: _wordCard(
+                            game,
+                            controller,
+                            item,
+                            score(item),
+                            motion,
+                          ),
+                        ),
+                    ],
+                  ),
             ),
           ],
         ),
@@ -356,41 +407,68 @@ class _GameScreenState extends ConsumerState<GameScreen>
     );
   }
 
-  Widget _slot(
-    GameState game,
-    GameController controller,
-    int index,
-    Duration motion,
-  ) {
-    final item = index < game.selected.length ? game.selected[index] : null;
-    return AnimatedSwitcher(
-      duration: motion,
-      transitionBuilder: (child, animation) => ScaleTransition(
-        scale: animation.drive(CurveTween(curve: Curves.easeOutBack)),
-        child: child,
+  Widget _craftControls(GameState game, GameController controller) {
+    final batchLabel =
+        game.selected.isNotEmpty
+            ? '선택 해제'
+            : game.latest != null
+            ? '이전 재료 선택'
+            : '모두 선택';
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: [
+            Text(
+              '${game.selected.length} / ${game.cardsRequired}장',
+              semanticsLabel:
+                  '필요한 카드 ${game.cardsRequired}장 중 ${game.selected.length}장 선택',
+            ),
+            TextButton(
+              onPressed:
+                  _busy
+                      ? null
+                      : () {
+                        HapticFeedback.selectionClick();
+                        controller.toggleBatchSelection();
+                      },
+              child: Text(batchLabel),
+            ),
+            FilledButton.icon(
+              onPressed:
+                  game.canCraft && !_busy ? () => _combine(controller) : null,
+              icon: const Icon(Icons.bolt),
+              label: const Text('조합하기'),
+            ),
+          ],
+        ),
       ),
-      child: SizedBox(
-        key: ValueKey(item?.word),
-        width: double.infinity,
-        child: OutlinedButton(
-          onPressed: item == null || _busy
-              ? null
-              : () {
+    );
+  }
+
+  Widget _slot(WordItem item, GameController controller, Duration motion) {
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(item.word),
+      tween: Tween(begin: .8, end: 1),
+      duration: motion,
+      curve: Curves.easeOutBack,
+      builder:
+          (context, scale, child) =>
+              Transform.scale(scale: scale, child: child),
+      child: InputChip(
+        label: Text('${item.emoji} ${item.word}'),
+        deleteButtonTooltipMessage: '${item.word} 선택 해제',
+        onDeleted:
+            _busy
+                ? null
+                : () {
                   HapticFeedback.selectionClick();
                   controller.toggle(item);
                 },
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size(0, 56),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-          child: Text(
-            item == null ? '슬롯 ${index + 1}' : '${item.emoji} ${item.word}',
-            textAlign: TextAlign.center,
-          ),
-        ),
       ),
     );
   }
@@ -404,7 +482,9 @@ class _GameScreenState extends ConsumerState<GameScreen>
   ) {
     final selected = game.selected.contains(item);
     final enabled =
-        !_busy && !game.cleared && (selected || game.selected.length < 2);
+        !_busy &&
+        !game.cleared &&
+        (selected || game.selected.length < game.cardsRequired);
     final colors = Theme.of(context).colorScheme;
     return AnimatedScale(
       key: ValueKey(item.word),
@@ -414,18 +494,18 @@ class _GameScreenState extends ConsumerState<GameScreen>
       child: Semantics(
         selected: selected,
         child: Material(
-          color: selected
-              ? colors.primaryContainer
-              : colors.surfaceContainerHigh,
+          color:
+              selected ? colors.primaryContainer : colors.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(14),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: enabled
-                ? () {
-                    HapticFeedback.selectionClick();
-                    controller.toggle(item);
-                  }
-                : null,
+            onTap:
+                enabled
+                    ? () {
+                      HapticFeedback.selectionClick();
+                      controller.toggle(item);
+                    }
+                    : null,
             child: Padding(
               padding: const EdgeInsets.all(8),
               child: Column(
@@ -436,7 +516,13 @@ class _GameScreenState extends ConsumerState<GameScreen>
                     textAlign: TextAlign.center,
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  Text('$score%', style: TextStyle(color: colors.primary)),
+                  Text(
+                    '${item.attribute.label} · $score%',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelSmall?.copyWith(color: colors.primary),
+                  ),
                 ],
               ),
             ),
@@ -450,21 +536,24 @@ class _GameScreenState extends ConsumerState<GameScreen>
     showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Text('조합 기록', style: Theme.of(context).textTheme.titleLarge),
-            if (history.isEmpty) const ListTile(title: Text('아직 시도한 조합이 없어요.')),
-            for (final (index, outcome) in history.indexed.toList().reversed)
-              ListTile(
-                leading: Text('${index + 1}'),
-                title: Text(outcome.equation),
-                subtitle: Text(outcome.note),
-              ),
-          ],
-        ),
-      ),
+      builder:
+          (context) => SafeArea(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Text('조합 기록', style: Theme.of(context).textTheme.titleLarge),
+                if (history.isEmpty)
+                  const ListTile(title: Text('아직 시도한 조합이 없어요.')),
+                for (final (index, outcome)
+                    in history.indexed.toList().reversed)
+                  ListTile(
+                    leading: Text('${index + 1}'),
+                    title: Text(outcome.equation),
+                    subtitle: Text(outcome.note),
+                  ),
+              ],
+            ),
+          ),
     );
   }
 }
@@ -475,11 +564,9 @@ class _Panel extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainer,
-      borderRadius: BorderRadius.circular(18),
-    ),
+  Widget build(BuildContext context) => Material(
+    color: Theme.of(context).colorScheme.surfaceContainer,
+    borderRadius: BorderRadius.circular(18),
     child: Padding(padding: const EdgeInsets.all(16), child: child),
   );
 }
@@ -495,10 +582,11 @@ class _ImpactBurst extends CustomPainter {
     final center = size.center(Offset.zero);
     final fade = 1 - progress;
     final travel = Curves.easeOutCubic.transform(progress);
-    final paint = Paint()
-      ..color = color.withValues(alpha: fade * .9)
-      ..strokeWidth = 2.5 * fade + .5
-      ..strokeCap = StrokeCap.round;
+    final paint =
+        Paint()
+          ..color = color.withValues(alpha: fade * .9)
+          ..strokeWidth = 2.5 * fade + .5
+          ..strokeCap = StrokeCap.round;
     canvas.drawCircle(
       center,
       16 * fade,

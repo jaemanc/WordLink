@@ -1,29 +1,59 @@
-enum Difficulty { easy, normal, hard }
+enum Difficulty {
+  easy(4),
+  normal(8),
+  hard(16);
+
+  const Difficulty(this.cardsRequired);
+
+  final int cardsRequired;
+}
+
+enum WordAttribute {
+  material('재료'),
+  energy('에너지'),
+  tool('도구'),
+  environment('환경'),
+  component('부품'),
+  phenomenon('현상');
+
+  const WordAttribute(this.label);
+
+  final String label;
+}
 
 class WordItem {
-  const WordItem(this.word, this.emoji);
+  const WordItem(this.word, this.emoji, this.attribute);
 
-  factory WordItem.fromJson(Map<String, dynamic> json) =>
-      WordItem(json['word'] as String, json['emoji'] as String);
+  factory WordItem.fromJson(
+    Map<String, dynamic> json, {
+    String wordKey = 'word',
+  }) => WordItem(
+    json[wordKey] as String,
+    json['emoji'] as String,
+    WordAttribute.values.byName(json['attribute'] as String? ?? 'material'),
+  );
 
   final String word;
   final String emoji;
+  final WordAttribute attribute;
 }
 
 class CombinationRule {
-  const CombinationRule(this.result, this.note);
+  const CombinationRule(this.result, this.note, this.hint);
 
   factory CombinationRule.fromJson(Map<String, dynamic> json) =>
       CombinationRule(
-        WordItem(json['resultWord'] as String, json['emoji'] as String),
+        WordItem.fromJson(json, wordKey: 'resultWord'),
         json['note'] as String,
+        json['hint'] as String?,
       );
 
   final WordItem result;
   final String note;
+  final String? hint;
 
-  static String key(String left, String right) =>
-      left.compareTo(right) <= 0 ? '$left|$right' : '$right|$left';
+  static String key(Iterable<String> words) =>
+      (words.toList()..sort()).join('|');
 }
 
 class Stage {
@@ -62,21 +92,21 @@ class Stage {
 
 class CraftOutcome {
   const CraftOutcome({
-    required this.left,
-    required this.right,
+    required this.ingredients,
     required this.result,
     required this.note,
+    required this.hint,
     required this.proximity,
     required this.isTargetReached,
   });
 
-  final WordItem left;
-  final WordItem right;
+  final List<WordItem> ingredients;
   final WordItem? result;
   final String note;
+  final String? hint;
   final int? proximity;
   final bool isTargetReached;
 
   String get equation =>
-      '${left.word} + ${right.word} → ${result?.word ?? '조합 불가'}';
+      '${ingredients.map((item) => item.word).join(' + ')} → ${result?.word ?? '조합 불가'}';
 }

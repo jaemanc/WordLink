@@ -25,16 +25,26 @@ class GameState {
   final List<WordItem> selected;
   final List<CraftOutcome> history;
 
+  int get cardsRequired => stage.difficulty.cardsRequired;
+  bool get canCraft => !cleared && selected.length == cardsRequired;
   int get moves => history.length;
   CraftOutcome? get latest => history.isEmpty ? null : history.last;
+  CraftOutcome? get lastHintedCraft {
+    for (final outcome in history.reversed) {
+      if (outcome.hint != null) return outcome;
+    }
+    return null;
+  }
+
   bool get cleared => latest?.isTargetReached ?? false;
-  int get stars => !cleared
-      ? 0
-      : moves <= stage.parSteps
-      ? 3
-      : moves <= stage.parSteps + 2
-      ? 2
-      : 1;
+  int get stars =>
+      !cleared
+          ? 0
+          : moves <= stage.parSteps
+          ? 3
+          : moves <= stage.parSteps + 2
+          ? 2
+          : 1;
 }
 
 class GameController extends Notifier<GameState?> {
@@ -55,7 +65,7 @@ class GameController extends Notifier<GameState?> {
     if (game == null || game.cleared || !game.inventory.contains(item)) return;
     final selected = [...game.selected];
     if (!selected.remove(item)) {
-      if (selected.length == 2) return;
+      if (selected.length == game.cardsRequired) return;
       selected.add(item);
     }
     state = GameState(
@@ -66,23 +76,37 @@ class GameController extends Notifier<GameState?> {
     );
   }
 
+  void toggleBatchSelection() {
+    final game = state;
+    if (game == null || game.cleared) return;
+    final previous = (game.lastHintedCraft ?? game.latest)?.ingredients;
+    state = GameState(
+      game.stage,
+      inventory: game.inventory,
+      selected:
+          game.selected.isNotEmpty
+              ? const []
+              : previous ??
+                  (game.inventory.length == game.cardsRequired
+                      ? game.inventory
+                      : const []),
+      history: game.history,
+    );
+  }
+
   void craft() {
     final game = state;
-    if (game == null || game.cleared || game.selected.length != 2) return;
+    if (game == null || !game.canCraft) return;
     final knowledge = ref.read(knowledgeProvider).requireValue;
-    final outcome = knowledge.craft(
-      game.stage,
-      game.selected[0],
-      game.selected[1],
-    );
+    final outcome = knowledge.craft(game.stage, game.selected);
     final result = outcome.result;
     state = GameState(
       game.stage,
       inventory:
           result != null &&
-              !game.inventory.any((item) => item.word == result.word)
-          ? List.unmodifiable([...game.inventory, result])
-          : game.inventory,
+                  !game.inventory.any((item) => item.word == result.word)
+              ? List.unmodifiable([...game.inventory, result])
+              : game.inventory,
       history: List.unmodifiable([...game.history, outcome]),
     );
   }
