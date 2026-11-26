@@ -6,66 +6,71 @@ import 'package:wordlink/models.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('all modes clear at par with their fixed card counts', () async {
-    final service = await LocalKnowledgeService.load(rootBundle.loadString);
-    expect(service.stages.map((stage) => stage.difficulty.cardsRequired), [
-      4,
-      8,
-      16,
-    ]);
-
-    expect(service.stages.map((stage) => stage.parSteps), [10, 15, 20]);
-    for (final stage in service.stages) {
-      final start = {for (final item in stage.initialWords) item.word: item};
-      final queue = [(start, 0)];
-      final seen = {CombinationRule.key(start.keys)};
-      int? shortest;
-
-      for (var head = 0; head < queue.length && shortest == null; head++) {
-        final (inventory, moves) = queue[head];
-        for (final key in stage.rules.keys) {
-          final words = key.split('|');
-          if (!words.every(inventory.containsKey)) continue;
-
-          final ingredients =
-              words.reversed.map((word) => inventory[word]!).toList();
-          final outcome = service.craft(stage, ingredients);
-          expect(outcome.ingredients, ingredients);
-          final result = outcome.result!;
-          if (outcome.isTargetReached) shortest = moves + 1;
-          if (inventory.containsKey(result.word)) continue;
-
-          final next = {...inventory, result.word: result};
-          if (seen.add(CombinationRule.key(next.keys))) {
-            queue.add((next, moves + 1));
+  test(
+    'all 30,000 English puzzles solve through their consumable recipes',
+    () async {
+      final packs = <String>[];
+      final service = await LocalKnowledgeService.load((path) {
+        if (path.startsWith('assets/puzzles/')) packs.add(path);
+        return rootBundle.loadString(path, cache: false);
+      });
+      expect(packs, isEmpty);
+      expect(service.stages.length, 30000);
+      final english = RegExp(r'^[A-Za-z][A-Za-z -]*$');
+      final goals = <String>{};
+      final vocabulary = <String>{};
+      for (final difficulty in Difficulty.values) {
+        final stages = service.stages.where(
+          (stage) => stage.difficulty == difficulty,
+        );
+        expect(stages.length, 10000);
+        final paths = <String>{};
+        final steps = [10, 15, 20][difficulty.index];
+        for (final stage in stages) {
+          expect(stage.parSteps, steps);
+          expect(goals.add(stage.targetWord), isTrue);
+          expect(english.hasMatch(stage.targetWord), isTrue);
+          final rounds = await service.loadRounds(stage);
+          paths.add(
+            rounds
+                .take(steps - 1)
+                .map((round) => round.rule.result.word)
+                .join('|'),
+          );
+          final inventory = <WordItem>{};
+          for (final (index, round) in rounds.indexed) {
+            inventory.addAll(round.stock);
+            vocabulary.addAll(round.stock.map((item) => item.word));
+            expect(
+              round.stock.every((item) => english.hasMatch(item.word)),
+              isTrue,
+            );
+            final ingredients = round.rule.ingredients.reversed.toList();
+            expect(ingredients.length, difficulty.cardsRequired);
+            expect(ingredients.every(inventory.contains), isTrue);
+            final wrong = inventory.firstWhere(
+              (item) => !ingredients.contains(item),
+            );
+            expect(
+              service.craft(stage, round, [
+                wrong,
+                ...ingredients.skip(1),
+              ]).result,
+              isNull,
+            );
+            final result = service.craft(stage, round, ingredients);
+            expect(result.isTargetReached, index == steps - 1);
+            expect(result.result, round.rule.result);
+            vocabulary.add(result.result!.word);
+            inventory.removeAll(ingredients);
+            expect(inventory.add(result.result!), isTrue);
           }
+          expect(service.proximity(stage.targetWord, stage.targetWord), 100);
         }
+        expect(paths.length, 480, reason: difficulty.name);
       }
-      expect(shortest, stage.parSteps, reason: stage.difficulty.name);
-      expect(service.proximity(stage.targetWord, stage.targetWord), 100);
-
-      expect(
-        () => service.craft(stage, stage.initialWords.skip(1).toList()),
-        throwsArgumentError,
-      );
-      expect(
-        () => service.craft(
-          stage,
-          List.filled(stage.difficulty.cardsRequired, stage.initialWords.first),
-        ),
-        throwsArgumentError,
-      );
-    }
-
-    final easy = service.stages.first;
-    final dough = service.craft(easy, easy.initialWords);
-    expect(dough.result?.word, '반죽');
-    expect(dough.result?.attribute, WordAttribute.material);
-    expect(dough.hint, contains('밀 → 반죽'));
-    expect(dough.proximity, 38);
-    expect(
-      service.craft(easy, [...easy.initialWords.take(3), dough.result!]).result,
-      isNull,
-    );
-  });
+      expect(packs.length, 45);
+      expect(vocabulary.length, greaterThanOrEqualTo(500));
+    },
+  );
 }

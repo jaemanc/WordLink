@@ -5,38 +5,38 @@ import 'local_knowledge_service.dart';
 import 'models.dart';
 
 final knowledgeProvider = FutureProvider(
-  (ref) => LocalKnowledgeService.load(rootBundle.loadString),
+  (ref) => LocalKnowledgeService.load(
+    (path) => rootBundle.loadString(path, cache: false),
+  ),
 );
 
-final gameProvider = NotifierProvider<GameController, GameState?>(
+final gameProvider = AsyncNotifierProvider<GameController, GameState>(
   GameController.new,
 );
 
 class GameState {
   GameState(
     this.stage, {
+    required this.rounds,
     required this.inventory,
     this.selected = const [],
     this.history = const [],
+    this.completedRounds = 0,
   });
 
   final Stage stage;
+  final List<PuzzleRound> rounds;
   final List<WordItem> inventory;
   final List<WordItem> selected;
   final List<CraftOutcome> history;
+  final int completedRounds;
 
   int get cardsRequired => stage.difficulty.cardsRequired;
   bool get canCraft => !cleared && selected.length == cardsRequired;
   int get moves => history.length;
   CraftOutcome? get latest => history.isEmpty ? null : history.last;
-  CraftOutcome? get lastHintedCraft {
-    for (final outcome in history.reversed) {
-      if (outcome.hint != null) return outcome;
-    }
-    return null;
-  }
+  bool get cleared => completedRounds == stage.parSteps;
 
-  bool get cleared => latest?.isTargetReached ?? false;
   int get stars =>
       !cleared
           ? 0
@@ -47,67 +47,96 @@ class GameState {
           : 1;
 }
 
-class GameController extends Notifier<GameState?> {
+class GameController extends AsyncNotifier<GameState> {
   @override
-  GameState? build() {
-    final knowledge = ref.watch(knowledgeProvider).asData?.value;
-    if (knowledge == null) return null;
+  Future<GameState> build() async {
+    final knowledge = await ref.watch(knowledgeProvider.future);
     final stage = knowledge.stages.first;
-    return GameState(stage, inventory: stage.initialWords);
+    final rounds = await knowledge.loadRounds(stage);
+    return GameState(stage, rounds: rounds, inventory: rounds.first.stock);
   }
 
-  void start(Stage stage) {
-    state = GameState(stage, inventory: stage.initialWords);
+  Future<void> start(Stage stage) async {
+    final current = state.asData?.value;
+    if (current == null) return;
+    if (current.stage == stage) {
+      state = AsyncData(
+        GameState(
+          stage,
+          rounds: current.rounds,
+          inventory: current.rounds.first.stock,
+        ),
+      );
+      return;
+    }
+
+    final knowledge = ref.read(knowledgeProvider).requireValue;
+    state = const AsyncLoading();
+    final next = await AsyncValue.guard(() async {
+      final rounds = await knowledge.loadRounds(stage);
+      return GameState(stage, rounds: rounds, inventory: rounds.first.stock);
+    });
+    if (ref.mounted) state = next;
   }
 
   void toggle(WordItem item) {
-    final game = state;
+    final game = state.asData?.value;
     if (game == null || game.cleared || !game.inventory.contains(item)) return;
     final selected = [...game.selected];
     if (!selected.remove(item)) {
       if (selected.length == game.cardsRequired) return;
       selected.add(item);
     }
-    state = GameState(
-      game.stage,
-      inventory: game.inventory,
-      selected: List.unmodifiable(selected),
-      history: game.history,
-    );
+    _updateSelection(game, List.unmodifiable(selected));
   }
 
-  void toggleBatchSelection() {
-    final game = state;
-    if (game == null || game.cleared) return;
-    final previous = (game.lastHintedCraft ?? game.latest)?.ingredients;
-    state = GameState(
-      game.stage,
-      inventory: game.inventory,
-      selected:
-          game.selected.isNotEmpty
-              ? const []
-              : previous ??
-                  (game.inventory.length == game.cardsRequired
-                      ? game.inventory
-                      : const []),
-      history: game.history,
+  void clearSelection() {
+    final game = state.asData?.value;
+    if (game != null) _updateSelection(game, const []);
+  }
+
+  void _updateSelection(GameState game, List<WordItem> selected) {
+    state = AsyncData(
+      GameState(
+        game.stage,
+        rounds: game.rounds,
+        inventory: game.inventory,
+        selected: selected,
+        history: game.history,
+        completedRounds: game.completedRounds,
+      ),
     );
   }
 
   void craft() {
-    final game = state;
+    final game = state.asData?.value;
     if (game == null || !game.canCraft) return;
     final knowledge = ref.read(knowledgeProvider).requireValue;
-    final outcome = knowledge.craft(game.stage, game.selected);
-    final result = outcome.result;
-    state = GameState(
+    final outcome = knowledge.craft(
       game.stage,
-      inventory:
-          result != null &&
-                  !game.inventory.any((item) => item.word == result.word)
-              ? List.unmodifiable([...game.inventory, result])
-              : game.inventory,
-      history: List.unmodifiable([...game.history, outcome]),
+      game.rounds[game.completedRounds],
+      game.selected,
+    );
+    final result = outcome.result;
+    final completed = game.completedRounds + (result == null ? 0 : 1);
+    state = AsyncData(
+      GameState(
+        game.stage,
+        rounds: game.rounds,
+        inventory:
+            result == null
+                ? game.inventory
+                : List.unmodifiable([
+                  result,
+                  if (!outcome.isTargetReached) ...game.rounds[completed].stock,
+                  ...game.inventory.where(
+                    (item) => !game.selected.contains(item),
+                  ),
+                ]),
+        selected: result == null ? game.selected : const [],
+        history: List.unmodifiable([...game.history, outcome]),
+        completedRounds: completed,
+      ),
     );
   }
 }

@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'craft_impact.dart';
 import 'game_controller.dart';
 import 'local_knowledge_service.dart';
 import 'models.dart';
@@ -19,8 +21,15 @@ class _GameScreenState extends ConsumerState<GameScreen>
     with SingleTickerProviderStateMixin {
   late final _impact = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 420),
+    duration: const Duration(milliseconds: 620),
   );
+  static const _audio = MethodChannel('wordlink/impact');
+  final _effectsSurface = GlobalKey();
+  final _workbench = GlobalKey();
+  final _slotKeys = <WordItem, GlobalKey>{};
+  Offset _impactCenter = Offset.zero;
+  List<({WordItem item, Offset from})> _flyingCards = const [];
+  CraftOutcome? _impactOutcome;
   bool _byProximity = false;
   WordAttribute? _attribute;
   bool _busy = false;
@@ -39,13 +48,18 @@ class _GameScreenState extends ConsumerState<GameScreen>
       _feedback();
       return;
     }
+    _captureCollision();
     setState(() => _busy = true);
     try {
       await _impact
-          .animateTo(.28, duration: const Duration(milliseconds: 115))
+          .animateTo(
+            CraftImpact.collision,
+            duration: const Duration(milliseconds: 180),
+          )
           .orCancel;
       if (!mounted) return;
       controller.craft();
+      _impactOutcome = ref.read(gameProvider).asData?.value.latest;
       _feedback();
       await _impact.forward().orCancel;
     } on TickerCanceled {
@@ -53,27 +67,94 @@ class _GameScreenState extends ConsumerState<GameScreen>
     } finally {
       if (mounted) {
         _impact.reset();
-        setState(() => _busy = false);
+        setState(() {
+          _busy = false;
+          _flyingCards = const [];
+          _impactOutcome = null;
+        });
       }
     }
   }
 
-  void _feedback() {
-    final outcome = ref.read(gameProvider)?.latest;
-    if (outcome?.isTargetReached ?? false) {
-      HapticFeedback.heavyImpact();
-    } else if (outcome?.result != null) {
-      HapticFeedback.mediumImpact();
-    } else {
-      HapticFeedback.lightImpact();
+  void _captureCollision() {
+    final surface = _effectsSurface.currentContext?.findRenderObject();
+    final game = ref.read(gameProvider).asData?.value;
+    if (surface is! RenderBox || !surface.hasSize || game == null) return;
+    final bounds = Offset.zero & surface.size;
+
+    Offset? visibleCenter(GlobalKey? key) {
+      final box = key?.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.hasSize || !box.attached) return null;
+      final point = surface.globalToLocal(
+        box.localToGlobal(box.size.center(Offset.zero)),
+      );
+      return bounds.contains(point) ? point : null;
     }
-    SystemSound.play(SystemSoundType.click);
+
+    _impactCenter = visibleCenter(_workbench) ?? bounds.center;
+    final radius = math.min(surface.size.width, surface.size.height) * .39;
+    _flyingCards = [
+      for (final (index, item) in game.selected.indexed)
+        (
+          item: item,
+          from:
+              visibleCenter(_slotKeys[item]) ??
+              bounds.center +
+                  Offset.fromDirection(
+                    index * math.pi * 2 / game.selected.length,
+                    radius,
+                  ),
+        ),
+    ];
   }
+
+  void _feedback() {
+    final outcome = ref.read(gameProvider).asData?.value.latest;
+    if (outcome?.result == null) {
+      HapticFeedback.lightImpact();
+      SystemSound.play(SystemSoundType.click);
+      return;
+    }
+    HapticFeedback.heavyImpact();
+    unawaited(_playImpactSound(outcome!.isTargetReached));
+  }
+
+  Future<void> _playImpactSound(bool cleared) async {
+    try {
+      await _audio.invokeMethod<void>('play', cleared);
+    } on MissingPluginException {
+      await SystemSound.play(SystemSoundType.click);
+    }
+  }
+
+  Widget _withImpact(Widget child) => AnimatedBuilder(
+    animation: _impact,
+    child: child,
+    builder: (context, child) {
+      final effect = CraftImpact(
+        progress: _impact.value,
+        center: _impactCenter,
+        cards: _flyingCards,
+        outcome: _impactOutcome,
+      );
+      return Stack(
+        key: _effectsSurface,
+        fit: StackFit.expand,
+        children: [
+          Transform.translate(
+            offset: _busy ? effect.recoil : Offset.zero,
+            child: child,
+          ),
+          if (_busy && _flyingCards.isNotEmpty) effect,
+        ],
+      );
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
-    final knowledge = ref.watch(knowledgeProvider);
-    final game = ref.watch(gameProvider);
+    final gameLoad = ref.watch(gameProvider);
+    final game = gameLoad.asData?.value;
     final motion =
         MediaQuery.disableAnimationsOf(context)
             ? Duration.zero
@@ -89,7 +170,8 @@ class _GameScreenState extends ConsumerState<GameScreen>
           if (game != null)
             IconButton(
               tooltip: '다시 시작',
-              onPressed: _busy ? null : () => controller.start(game.stage),
+              onPressed:
+                  _busy ? null : () => _startStage(controller, game.stage),
               icon: const Icon(Icons.restart_alt),
             ),
         ],
@@ -98,27 +180,31 @@ class _GameScreenState extends ConsumerState<GameScreen>
           game == null || game.cleared
               ? null
               : _craftControls(game, controller),
-      body: SafeArea(
-        child: knowledge.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error:
-              (error, _) => Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('로컬 게임 데이터를 불러오지 못했어요.'),
-                    TextButton(
-                      onPressed: () => ref.invalidate(knowledgeProvider),
-                      child: const Text('다시 불러오기'),
-                    ),
-                  ],
+      body: _withImpact(
+        SafeArea(
+          child: gameLoad.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error:
+                (error, _) => Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('로컬 게임 데이터를 불러오지 못했어요.'),
+                      TextButton(
+                        onPressed: () => ref.invalidate(knowledgeProvider),
+                        child: const Text('다시 불러오기'),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-          data:
-              (service) =>
-                  game == null
-                      ? const SizedBox.shrink()
-                      : _play(game, service, controller, motion),
+            data:
+                (game) => _play(
+                  game,
+                  ref.read(knowledgeProvider).requireValue,
+                  controller,
+                  motion,
+                ),
+          ),
         ),
       ),
     );
@@ -130,6 +216,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
     GameController controller,
     Duration motion,
   ) {
+    _slotKeys.removeWhere((item, _) => !game.selected.contains(item));
     final colors = Theme.of(context).colorScheme;
     final stage = game.stage;
     int score(WordItem item) => service.proximity(item.word, stage.targetWord);
@@ -145,9 +232,10 @@ class _GameScreenState extends ConsumerState<GameScreen>
     }
     final best = game.inventory.map(score).reduce(math.max);
     final latest = game.latest;
-    final hinted = game.lastHintedCraft;
     final accent = latest?.result == null ? colors.error : colors.primary;
     final index = service.stages.indexOf(stage);
+    final modeStages = service.stagesFor(stage.difficulty);
+    final stageNumber = modeStages.indexOf(stage) + 1;
 
     return Center(
       child: ConstrainedBox(
@@ -160,20 +248,33 @@ class _GameScreenState extends ConsumerState<GameScreen>
               spacing: 8,
               runSpacing: 4,
               children: [
-                for (final option in service.stages)
+                for (final difficulty in Difficulty.values)
                   ChoiceChip(
                     label: Text(
-                      '${option.difficulty.name.toUpperCase()} ${option.difficulty.cardsRequired}장',
+                      '${difficulty.name.toUpperCase()} ${difficulty.cardsRequired}장',
                     ),
-                    selected: stage.id == option.id,
+                    selected: stage.difficulty == difficulty,
                     onSelected:
                         _busy
                             ? null
                             : (selected) {
-                              if (selected) controller.start(option);
+                              if (selected) {
+                                _startStage(
+                                  controller,
+                                  service.stagesFor(difficulty).first,
+                                );
+                              }
                             },
                   ),
               ],
+            ),
+            OutlinedButton.icon(
+              onPressed:
+                  _busy
+                      ? null
+                      : () => _pickStage(modeStages, stage, controller),
+              icon: const Icon(Icons.list_alt),
+              label: Text('문제 $stageNumber / ${modeStages.length}'),
             ),
             const SizedBox(height: 12),
             _Panel(
@@ -196,7 +297,8 @@ class _GameScreenState extends ConsumerState<GameScreen>
                       runSpacing: 4,
                       children: [
                         Text('최고 근접도 $best%'),
-                        Text('${game.moves}회 시도 · 기준 ${stage.parSteps}회'),
+                        Text('${game.completedRounds} / ${stage.parSteps}단계'),
+                        Text('${game.moves}회 시도'),
                       ],
                     ),
                   ),
@@ -225,49 +327,32 @@ class _GameScreenState extends ConsumerState<GameScreen>
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 10),
-                  AnimatedBuilder(
-                    animation: _impact,
-                    builder: (context, _) {
-                      final travel = (1 - (_impact.value / .28 - 1).abs())
-                          .clamp(0.0, 1.0);
-                      return Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Transform.scale(
-                            scale: 1 - travel * .13,
-                            child: AnimatedSize(
-                              duration: motion,
-                              alignment: Alignment.topCenter,
-                              child:
-                                  game.selected.isEmpty
-                                      ? Text(
-                                        '보유 단어를 탭해 ${stage.difficulty.cardsRequired}장을 고르세요.',
-                                      )
-                                      : Wrap(
-                                        alignment: WrapAlignment.center,
-                                        spacing: 6,
-                                        runSpacing: 4,
-                                        children: [
-                                          for (final item in game.selected)
-                                            _slot(item, controller, motion),
-                                        ],
-                                      ),
-                            ),
-                          ),
-                          if (_busy && _impact.value >= .28)
-                            Positioned.fill(
-                              child: IgnorePointer(
-                                child: CustomPaint(
-                                  painter: _ImpactBurst(
-                                    (_impact.value - .28) / .72,
-                                    accent,
-                                  ),
-                                ),
+                  AnimatedSize(
+                    key: _workbench,
+                    duration: motion,
+                    alignment: Alignment.topCenter,
+                    child:
+                        game.selected.isEmpty
+                            ? Text(
+                              '보유 단어를 탭해 ${stage.difficulty.cardsRequired}장을 고르세요.',
+                            )
+                            : Opacity(
+                              opacity:
+                                  _busy &&
+                                          _flyingCards.isNotEmpty &&
+                                          _impactOutcome == null
+                                      ? 0
+                                      : 1,
+                              child: Wrap(
+                                alignment: WrapAlignment.center,
+                                spacing: 6,
+                                runSpacing: 4,
+                                children: [
+                                  for (final item in game.selected)
+                                    _slot(item, controller, motion),
+                                ],
                               ),
                             ),
-                        ],
-                      );
-                    },
                   ),
                   if (latest != null) ...[
                     const SizedBox(height: 10),
@@ -286,35 +371,26 @@ class _GameScreenState extends ConsumerState<GameScreen>
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          Text(
-                            [
-                              latest.note,
-                              if (latest.proximity != null)
-                                '근접도 ${latest.proximity}%',
-                            ].join(' · '),
-                            textAlign: TextAlign.center,
-                          ),
+                          if (latest.proximity case final proximity?)
+                            Text('근접도 $proximity%')
+                          else
+                            const Text('카드 구성을 바꿔 보세요.'),
                         ],
                       ),
                     ),
                   ],
-                  if (!game.cleared && hinted != null) ...[
-                    const SizedBox(height: 8),
-                    if (stage.difficulty == Difficulty.easy)
-                      Text(
-                        '다음 조합 · ${hinted.hint}',
-                        textAlign: TextAlign.center,
-                      )
-                    else
-                      ExpansionTile(
-                        key: ValueKey(hinted.result?.word),
-                        title: const Text('다음 조합 힌트'),
-                        tilePadding: EdgeInsets.zero,
-                        children: [
-                          Text(hinted.hint!, textAlign: TextAlign.center),
-                        ],
-                      ),
-                  ],
+                  if (!game.cleared)
+                    ExpansionTile(
+                      key: ValueKey(game.completedRounds),
+                      title: const Text('이번 조합 힌트'),
+                      tilePadding: EdgeInsets.zero,
+                      children: [
+                        Text(
+                          'Use: ${game.rounds[game.completedRounds].rule.ingredients.map((item) => item.word).join(', ')}',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
                   if (game.cleared) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -332,8 +408,10 @@ class _GameScreenState extends ConsumerState<GameScreen>
                         onPressed:
                             _busy
                                 ? null
-                                : () =>
-                                    controller.start(service.stages[index + 1]),
+                                : () => _startStage(
+                                  controller,
+                                  service.stages[index + 1],
+                                ),
                         child: const Text('다음 스테이지'),
                       ),
                   ],
@@ -407,13 +485,28 @@ class _GameScreenState extends ConsumerState<GameScreen>
     );
   }
 
+  void _startStage(GameController controller, Stage stage) {
+    setState(() => _attribute = null);
+    controller.start(stage);
+  }
+
+  Future<void> _pickStage(
+    List<Stage> stages,
+    Stage current,
+    GameController controller,
+  ) async {
+    final stage = await showModalBottomSheet<Stage>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => _StagePicker(stages),
+    );
+    if (mounted && stage != null && stage != current) {
+      _startStage(controller, stage);
+    }
+  }
+
   Widget _craftControls(GameState game, GameController controller) {
-    final batchLabel =
-        game.selected.isNotEmpty
-            ? '선택 해제'
-            : game.latest != null
-            ? '이전 재료 선택'
-            : '모두 선택';
     return SafeArea(
       top: false,
       child: Padding(
@@ -430,13 +523,10 @@ class _GameScreenState extends ConsumerState<GameScreen>
             ),
             TextButton(
               onPressed:
-                  _busy
+                  _busy || game.selected.isEmpty
                       ? null
-                      : () {
-                        HapticFeedback.selectionClick();
-                        controller.toggleBatchSelection();
-                      },
-              child: Text(batchLabel),
+                      : controller.clearSelection,
+              child: const Text('선택 해제'),
             ),
             FilledButton.icon(
               onPressed:
@@ -452,7 +542,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
 
   Widget _slot(WordItem item, GameController controller, Duration motion) {
     return TweenAnimationBuilder<double>(
-      key: ValueKey(item.word),
+      key: _slotKeys.putIfAbsent(item, GlobalKey.new),
       tween: Tween(begin: .8, end: 1),
       duration: motion,
       curve: Curves.easeOutBack,
@@ -549,11 +639,75 @@ class _GameScreenState extends ConsumerState<GameScreen>
                   ListTile(
                     leading: Text('${index + 1}'),
                     title: Text(outcome.equation),
-                    subtitle: Text(outcome.note),
                   ),
               ],
             ),
           ),
+    );
+  }
+}
+
+class _StagePicker extends StatefulWidget {
+  const _StagePicker(this.stages);
+
+  final List<Stage> stages;
+
+  @override
+  State<_StagePicker> createState() => _StagePickerState();
+}
+
+class _StagePickerState extends State<_StagePicker> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final number = int.tryParse(_query);
+    final matches =
+        widget.stages.indexed.where((entry) {
+          final (index, stage) = entry;
+          return number == null
+              ? stage.targetWord.toLowerCase().contains(_query)
+              : index + 1 == number;
+        }).toList();
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: FractionallySizedBox(
+        heightFactor: .85,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: TextField(
+                decoration: const InputDecoration(
+                  labelText: '번호 또는 영어 목표 단어 검색',
+                  prefixIcon: Icon(Icons.search),
+                ),
+                onChanged:
+                    (value) =>
+                        setState(() => _query = value.trim().toLowerCase()),
+              ),
+            ),
+            Expanded(
+              child:
+                  matches.isEmpty
+                      ? const Center(child: Text('검색 결과가 없어요.'))
+                      : ListView.builder(
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) {
+                          final (position, stage) = matches[index];
+                          return ListTile(
+                            leading: Text('${position + 1}'),
+                            title: Text(
+                              '${stage.targetEmoji} ${stage.targetWord}',
+                            ),
+                            onTap: () => Navigator.pop(context, stage),
+                          );
+                        },
+                      ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -569,43 +723,4 @@ class _Panel extends StatelessWidget {
     borderRadius: BorderRadius.circular(18),
     child: Padding(padding: const EdgeInsets.all(16), child: child),
   );
-}
-
-class _ImpactBurst extends CustomPainter {
-  const _ImpactBurst(this.progress, this.color);
-
-  final double progress;
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    final fade = 1 - progress;
-    final travel = Curves.easeOutCubic.transform(progress);
-    final paint =
-        Paint()
-          ..color = color.withValues(alpha: fade * .9)
-          ..strokeWidth = 2.5 * fade + .5
-          ..strokeCap = StrokeCap.round;
-    canvas.drawCircle(
-      center,
-      16 * fade,
-      Paint()..color = Colors.white.withValues(alpha: fade * .85),
-    );
-    for (var i = 0; i < 14; i++) {
-      final direction = Offset.fromDirection(i * math.pi / 7);
-      final reach = (i.isEven ? 94.0 : 62.0) * travel;
-      canvas.drawLine(
-        center + direction * (8 + reach * .6),
-        center + direction * (18 + reach),
-        paint,
-      );
-    }
-    paint.style = PaintingStyle.stroke;
-    canvas.drawCircle(center, 8 + travel * 53, paint);
-  }
-
-  @override
-  bool shouldRepaint(_ImpactBurst oldDelegate) =>
-      progress != oldDelegate.progress || color != oldDelegate.color;
 }

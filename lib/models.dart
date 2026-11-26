@@ -1,11 +1,12 @@
 enum Difficulty {
-  easy(4),
-  normal(8),
-  hard(16);
+  easy(4, 10),
+  normal(8, 15),
+  hard(16, 20);
 
-  const Difficulty(this.cardsRequired);
+  const Difficulty(this.cardsRequired, this.parSteps);
 
   final int cardsRequired;
+  final int parSteps;
 }
 
 enum WordAttribute {
@@ -24,13 +25,10 @@ enum WordAttribute {
 class WordItem {
   const WordItem(this.word, this.emoji, this.attribute);
 
-  factory WordItem.fromJson(
-    Map<String, dynamic> json, {
-    String wordKey = 'word',
-  }) => WordItem(
-    json[wordKey] as String,
-    json['emoji'] as String,
-    WordAttribute.values.byName(json['attribute'] as String? ?? 'material'),
+  factory WordItem.fromRow(List<dynamic> row) => WordItem(
+    row[0] as String,
+    row[1] as String,
+    WordAttribute.values.byName(row[2] as String),
   );
 
   final String word;
@@ -39,71 +37,52 @@ class WordItem {
 }
 
 class CombinationRule {
-  const CombinationRule(this.result, this.note, this.hint);
+  CombinationRule({required List<WordItem> ingredients, required this.result})
+    : ingredients = List.unmodifiable(ingredients),
+      _ingredientSet = ingredients.toSet();
 
-  factory CombinationRule.fromJson(Map<String, dynamic> json) =>
-      CombinationRule(
-        WordItem.fromJson(json, wordKey: 'resultWord'),
-        json['note'] as String,
-        json['hint'] as String?,
-      );
-
+  final List<WordItem> ingredients;
+  final Set<WordItem> _ingredientSet;
   final WordItem result;
-  final String note;
-  final String? hint;
 
-  static String key(Iterable<String> words) =>
-      (words.toList()..sort()).join('|');
+  bool matches(List<WordItem> selection) =>
+      selection.length == ingredients.length &&
+      selection.toSet().length == ingredients.length &&
+      selection.every(_ingredientSet.contains);
+}
+
+class PuzzleRound {
+  PuzzleRound(this.rule, List<WordItem> stock)
+    : stock = List.unmodifiable(stock);
+
+  final CombinationRule rule;
+  final List<WordItem> stock;
 }
 
 class Stage {
-  Stage.fromJson(Map<String, dynamic> json)
-    : id = json['id'] as int,
-      difficulty = Difficulty.values.byName(json['difficulty'] as String),
-      targetWord = json['targetWord'] as String,
-      targetEmoji = json['targetEmoji'] as String,
-      initialWords = List.unmodifiable(
-        (json['initialWords'] as List).map(
-          (item) => WordItem.fromJson(item as Map<String, dynamic>),
-        ),
-      ),
-      parSteps = json['parSteps'] as int,
-      rules = Map.unmodifiable(
-        (json['rules'] as Map<String, dynamic>).map(
-          (key, value) => MapEntry(
-            key,
-            CombinationRule.fromJson(value as Map<String, dynamic>),
-          ),
-        ),
-      ),
-      acceptedAnswers = Set.unmodifiable(
-        (json['acceptedAnswers'] as List).cast<String>(),
-      );
+  const Stage(this.id, this.difficulty, this.target, this.pack, this.position);
 
   final int id;
   final Difficulty difficulty;
-  final String targetWord;
-  final String targetEmoji;
-  final List<WordItem> initialWords;
-  final int parSteps;
-  final Map<String, CombinationRule> rules;
-  final Set<String> acceptedAnswers;
+  final WordItem target;
+  final int pack;
+  final int position;
+
+  int get parSteps => difficulty.parSteps;
+  String get targetWord => target.word;
+  String get targetEmoji => target.emoji;
 }
 
 class CraftOutcome {
   const CraftOutcome({
     required this.ingredients,
     required this.result,
-    required this.note,
-    required this.hint,
     required this.proximity,
     required this.isTargetReached,
   });
 
   final List<WordItem> ingredients;
   final WordItem? result;
-  final String note;
-  final String? hint;
   final int? proximity;
   final bool isTargetReached;
 

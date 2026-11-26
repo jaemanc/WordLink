@@ -17,3 +17,5 @@ flutter:
   assets:
     - assets/stages.json
     - assets/embeddings.json
+    - assets/craft_impact.wav
+    - assets/puzzles/
