@@ -397,7 +397,17 @@
 "Bread","Iced Latte","Honey Latte","Vanilla Hot Chocolate","Vanilla Ice Cream","Sushi Rice","Soy Milk","Watercolor Painting","Pottery","Jar Candle","Drawstring Bag","Picture Frame","Colored Glass","Induction Coil","Lamp","Control Circuit","Patchwork Quilt","Marbled Paper",
 "Buttered Toast","Tomato Pasta","Apple Pie","Iced Vanilla Latte","Berry Sundae","Seaweed Roll","Tofu","Grilled Tofu","Jam Sandwich","Terrarium","Floral Candle","Stained Glass Panel","Mechanical Scale","Electromagnet","Relay","Motor Controller","Mobile Robot","Bamboo Lantern","Double-Decker Sandwich","Quilted Bag",
 "Book","Perfume","Windmill","Lightning","Rainbow","Caramel","Electric Car","Rope Ladder","Paper Lantern","Whetstone","Hearth","Tea","Milkshake","Marmalade","Herbarium","Rain"
-],"topics":[
+],"answerCategories":{
+"nature":["Steam","Lightning","Rainbow","Rain"],
+"food":["Flatbread","Pasta Dough","Fresh Pasta","Lemonade","Iced Lemonade","Latte","Honey Vanilla Latte","Chocolate Milk","Hot Chocolate","Ice Cream","Cooked Rice","Porridge","Berry Jam","Grape Syrup","Bread","Iced Latte","Honey Latte","Vanilla Hot Chocolate","Vanilla Ice Cream","Sushi Rice","Soy Milk","Buttered Toast","Tomato Pasta","Apple Pie","Iced Vanilla Latte","Berry Sundae","Seaweed Roll","Tofu","Grilled Tofu","Jam Sandwich","Double-Decker Sandwich","Caramel","Tea","Milkshake","Marmalade"],
+"art":["Brush","Watercolor Paint","Watercolor Painting","Pottery","Marbled Paper","Picture Frame","Stained Glass Panel"],
+"plants":["Flower Necklace","Bouquet","Terrarium","Herbarium"],
+"tools":["Compass","Telescope","Microscope","Mechanical Scale","Rope Ladder","Whetstone","Windmill"],
+"electricity":["Bulb","Circuit Board","Induction Coil","Lamp","Control Circuit","Electromagnet","Relay","Motor Controller","Mobile Robot"],
+"materials":["Glass","Ceramic","Glass Beads","Colored Glass"],
+"transport":["Wooden Cart","Handcart","Electric Car"],
+"everyday":["Candle","Notebook","Kite","Jar Candle","Drawstring Bag","Patchwork Quilt","Floral Candle","Bamboo Lantern","Quilted Bag","Book","Perfume","Paper Lantern","Hearth"]
+},"topics":[
 ["Water", "Milk", "Coffee", "Lemon", "Orange", "Honey", "Sugar", "Grapes", "Berry", "Vial"],
 ["Flour", "Egg", "Butter", "Oats", "Rice", "Yeast", "Potato", "Basil", "Tomato", "Vinegar", "Soybean", "Seaweed", "Salt", "Cocoa", "Vanilla", "Oil"],
 ["Wood", "Paper", "Pencil", "Cotton", "Thread", "String", "Needle", "Tape", "Felt", "Bandage", "Brush", "Pigment", "Gum Arabic"],

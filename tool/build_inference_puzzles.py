@@ -127,6 +127,11 @@ def bake():
     answer_words = data["answerWords"]
     if len(set(answer_words)) != len(answer_words):
         raise ValueError("Duplicate reviewed answer")
+    categorized = [(word, category) for category, members in data["answerCategories"].items()
+                   for word in members]
+    if sorted(word for word, _ in categorized) != sorted(answer_words):
+        raise ValueError("Every reviewed answer needs exactly one category")
+    categories = {word: category for word, category in categorized}
     for target in answer_words:
         if target not in reverse or any(not 1 <= len(label.split()) <= 3
                                         for label in (target, words[target])):
@@ -207,6 +212,7 @@ def bake():
                 "words": list(words.items()),
                 "recipes": [[ids[a], ids[b], ids[result]] for (a, b), result in recipes.items()],
                 "scores": scores,
+                "answerCategories": {ids[word]: categories[word] for word in answer_words},
                 "handSize": HAND_SIZE,
             },
             ensure_ascii=False,

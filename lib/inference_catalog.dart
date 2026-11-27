@@ -28,6 +28,8 @@ class InferenceBoard {
   final List<int> scores;
   final int minimumMoves;
 
+  int get maximumMoves => minimumMoves + 5;
+
   int proximity(int word) => scores[word];
 
   int starsFor(int moves) =>
@@ -39,12 +41,22 @@ class InferenceBoard {
 }
 
 class InferenceCatalog {
-  InferenceCatalog._(this.words, this._recipes, this._scores, this.handSize);
+  InferenceCatalog._(
+    this.words,
+    this._recipes,
+    this._scores,
+    this.handSize,
+    this._answerCategories,
+  );
 
   final List<InferenceWord> words;
   final Map<(int, int), int> _recipes;
   final Map<int, List<int>> _scores;
   final int handSize;
+  final Map<int, String> _answerCategories;
+
+  String? answerCategory(InferenceBoard board) =>
+      _answerCategories[board.target];
   final _packs = <int, List<List<int>>>{};
   final _random = Random();
 
@@ -74,10 +86,21 @@ class InferenceCatalog {
       }
       recipes[key] = result;
     }
-    return InferenceCatalog._(List.unmodifiable(words), recipes, {
-      for (final entry in (json['scores'] as Map<String, dynamic>).entries)
-        int.parse(entry.key): List<int>.unmodifiable(entry.value as List),
-    }, json['handSize'] as int);
+    return InferenceCatalog._(
+      List.unmodifiable(words),
+      recipes,
+      {
+        for (final entry in (json['scores'] as Map<String, dynamic>).entries)
+          int.parse(entry.key): List<int>.unmodifiable(entry.value as List),
+      },
+      json['handSize'] as int,
+      {
+        for (final entry
+            in (json['answerCategories'] as Map<String, dynamic>? ?? {})
+                .entries)
+          int.parse(entry.key): entry.value as String,
+      },
+    );
   }
 
   static (int, int) _key(int a, int b) => a < b ? (a, b) : (b, a);

@@ -47,6 +47,9 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
   bool _failedToLoad = false;
   bool _solved = false;
 
+  bool get _exhausted => !_solved && _moves >= (_board?.maximumMoves ?? 1);
+  bool get _finished => _solved || _exhausted;
+
   bool get _korean => Localizations.localeOf(context).languageCode == 'ko';
   String _tr(String korean, String english) =>
       gameText(context, korean, english);
@@ -128,7 +131,7 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
   }
 
   void _toggle(int word) {
-    if (_solved || _loading) return;
+    if (_finished || _loading) return;
     final selecting = !_selection.contains(word);
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     setState(() {
@@ -213,19 +216,31 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
   }
 
   void _combine(InferenceCatalog catalog) {
-    if (_selection.length != 2 || _solved || _loading) return;
+    if (_selection.length != 2 || _finished || _loading) return;
     final a = _selection[0];
     final b = _selection[1];
     final result = catalog.recipeResult(a, b);
     if (result == null) {
       setState(() {
         _moves++;
+        if (_exhausted) {
+          _selection.clear();
+          _impactWord = null;
+          _recipeClue = null;
+          _message = null;
+          return;
+        }
         _message = _tr(
           '두 단어를 함께 설명하는 결과를 찾지 못했어요. 한 장을 바꿔 보세요.',
           'No known result connects both words. Try swapping one card.',
         );
       });
       HapticFeedback.lightImpact();
+      if (_exhausted) {
+        unawaited(_showFailure());
+      } else if (_moves == _board!.minimumMoves + 1) {
+        _scrollToSummary();
+      }
       return;
     }
     _record(result, List.unmodifiable(_selection), handSize: catalog.handSize);
@@ -270,21 +285,79 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
     });
     if (_solved) {
       HapticFeedback.heavyImpact();
-      if (_scroll.hasClients) {
-        if (MediaQuery.disableAnimationsOf(context)) {
-          _scroll.jumpTo(0);
-        } else {
-          unawaited(
-            _scroll.animateTo(
-              0,
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-            ),
-          );
-        }
-      }
     } else {
       HapticFeedback.selectionClick();
+    }
+    if (_solved || _moves == board.minimumMoves + 1) _scrollToSummary();
+    if (_exhausted) unawaited(_showFailure());
+  }
+
+  int _bestSimilarity(InferenceBoard board) => _history.fold(
+    0,
+    (best, entry) => math.max(best, _score(board, entry.result)),
+  );
+
+  void _retry(InferenceBoard board) {
+    setState(() => _resetRun(board));
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  Future<void> _showFailure() async {
+    final board = _board!;
+    final best = _bestSimilarity(board);
+    final retry = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder:
+          (dialogContext) => AlertDialog(
+            icon: Icon(
+              Icons.bolt_outlined,
+              color: Theme.of(dialogContext).colorScheme.error,
+            ),
+            title: Text(_tr('조합 횟수를 모두 사용했어요', 'No combinations left')),
+            content: Text(
+              _tr('최고 유사도 $best%', 'Best similarity $best%'),
+              textAlign: TextAlign.center,
+            ),
+            actionsAlignment: MainAxisAlignment.center,
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(_tr('재도전하기!', 'Try again!')),
+              ),
+            ],
+          ),
+    );
+    if (retry == true && mounted && identical(_board, board) && _exhausted) {
+      _retry(board);
+    }
+  }
+
+  String? _categoryLabel(String? category) => switch (category) {
+    'nature' => _tr('자연 현상', 'Natural phenomena'),
+    'food' => _tr('음식·음료', 'Food & drinks'),
+    'art' => _tr('미술·공예', 'Arts & crafts'),
+    'plants' => _tr('식물·꽃', 'Plants & flowers'),
+    'tools' => _tr('도구·기구', 'Tools & instruments'),
+    'electricity' => _tr('전기·전자', 'Electricity & electronics'),
+    'materials' => _tr('재료', 'Materials'),
+    'transport' => _tr('이동 수단', 'Transportation'),
+    'everyday' => _tr('생활용품', 'Everyday items'),
+    _ => null,
+  };
+
+  void _scrollToSummary() {
+    if (!_scroll.hasClients) return;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _scroll.jumpTo(0);
+    } else {
+      unawaited(
+        _scroll.animateTo(
+          0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+        ),
+      );
     }
   }
 
@@ -332,7 +405,7 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
 
   Future<void> _guess(InferenceCatalog catalog) async {
     final typed = await _askForWord(setTarget: false);
-    if (!mounted || typed == null || _solved || _loading) return;
+    if (!mounted || typed == null || _finished || _loading) return;
     final matches = catalog.find(typed, _korean);
     if (matches.isEmpty) {
       setState(
@@ -417,19 +490,44 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
     ),
   );
 
-  Widget _runSummary(InferenceBoard board, StageRecord? record) {
+  Widget _runSummary(
+    InferenceBoard board,
+    StageRecord? record,
+    int best,
+    String? category,
+  ) {
     final stars = board.starsFor(_moves);
+    final nearLimit = board.maximumMoves - _moves <= 2;
+    final errorColor = Theme.of(context).colorScheme.error;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return Column(
       children: [
         Text(
           _tr(
-            '최소 조합 ${board.minimumMoves}회 · ${_solved ? '사용' : '현재'} $_moves회',
-            'Minimum ${board.minimumMoves} · ${_solved ? 'Used' : 'Current'} $_moves',
+            '최소 조합 ${board.minimumMoves}회',
+            'Minimum ${board.minimumMoves} combinations',
           ),
           textAlign: TextAlign.center,
         ),
-        if (_solved)
+        Text(
+          _tr(
+            '조합 $_moves / ${board.maximumMoves}회',
+            'Combinations $_moves / ${board.maximumMoves}',
+          ),
+          style: TextStyle(
+            color: nearLimit ? errorColor : null,
+            fontWeight: FontWeight.bold,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        if (!_solved && _moves > board.minimumMoves && category != null)
+          Text(
+            _tr('범주 힌트 · $category', 'Category hint · $category'),
+            textAlign: TextAlign.center,
+          ),
+        if (_exhausted)
+          Text(_tr('최고 유사도 $best%', 'Best similarity $best%'))
+        else if (_solved)
           TweenAnimationBuilder<double>(
             tween: Tween(begin: reduceMotion ? 1 : .45, end: 1),
             duration:
@@ -486,16 +584,7 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
     final last = _history.lastOrNull;
     final score =
         last == null || board == null ? 0 : _score(board, last.result);
-    final best =
-        board == null
-            ? 0
-            : _history.fold<int>(
-              0,
-              (best, entry) =>
-                  _score(board, entry.result) > best
-                      ? _score(board, entry.result)
-                      : best,
-            );
+    final best = board == null ? 0 : _bestSimilarity(board);
     final colors = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: const BoxDecoration(
@@ -526,30 +615,28 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
                     alignment: WrapAlignment.center,
                     spacing: 10,
                     children: [
-                      if (_solved) ...[
+                      if (_finished) ...[
                         OutlinedButton(
-                          onPressed: () {
-                            setState(() => _resetRun(board));
-                            if (_scroll.hasClients) _scroll.jumpTo(0);
-                          },
+                          onPressed: () => _retry(board),
                           child: Text(
-                            board.starsFor(_moves) < 3
+                            _solved && board.starsFor(_moves) < 3
                                 ? _tr('별 3개 재도전', 'Retry for 3 stars')
                                 : _tr('재도전', 'Retry'),
                           ),
                         ),
-                        FilledButton(
-                          onPressed: () => _start(_difficulty),
-                          child: Text(_tr('다음 문제', 'Next puzzle')),
-                        ),
+                        if (_solved)
+                          FilledButton(
+                            onPressed: () => _start(_difficulty),
+                            child: Text(_tr('다음 문제', 'Next puzzle')),
+                          ),
                       ] else ...[
                         OutlinedButton(
-                          onPressed: _solved ? null : () => _guess(catalog),
+                          onPressed: () => _guess(catalog),
                           child: Text(_tr('정답 입력', 'Guess answer')),
                         ),
                         FilledButton.icon(
                           onPressed:
-                              _selection.length != 2 || _solved
+                              _selection.length != 2
                                   ? null
                                   : () => _combine(catalog),
                           icon: const Icon(Icons.bolt),
@@ -621,29 +708,38 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
                                           ),
                                         ),
                                         const SizedBox(height: 6),
-                                        _runSummary(board, record),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          _tr(
-                                            '현재 $score% · 최고 $best%',
-                                            'Current $score% · Best $best%',
+                                        _runSummary(
+                                          board,
+                                          record,
+                                          best,
+                                          _categoryLabel(
+                                            catalog.answerCategory(board),
                                           ),
                                         ),
-                                        const SizedBox(height: 5),
-                                        TweenAnimationBuilder<double>(
-                                          tween: Tween(
-                                            begin: 0,
-                                            end: score / 100,
+                                        if (!_exhausted) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            _tr(
+                                              '현재 $score% · 최고 $best%',
+                                              'Current $score% · Best $best%',
+                                            ),
                                           ),
-                                          duration: const Duration(
-                                            milliseconds: 250,
+                                          const SizedBox(height: 5),
+                                          TweenAnimationBuilder<double>(
+                                            tween: Tween(
+                                              begin: 0,
+                                              end: score / 100,
+                                            ),
+                                            duration: const Duration(
+                                              milliseconds: 250,
+                                            ),
+                                            builder:
+                                                (context, value, _) =>
+                                                    LinearProgressIndicator(
+                                                      value: value,
+                                                    ),
                                           ),
-                                          builder:
-                                              (context, value, _) =>
-                                                  LinearProgressIndicator(
-                                                    value: value,
-                                                  ),
-                                        ),
+                                        ],
                                       ],
                                     ),
                                   ),
@@ -690,7 +786,7 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
                                         ),
                                     ],
                                   ),
-                                if (!_solved)
+                                if (!_finished)
                                   Center(
                                     child: TextButton.icon(
                                       onPressed: () => _suggest(catalog, board),
@@ -848,7 +944,8 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen>
                                   ),
                                   clipBehavior: Clip.antiAlias,
                                   child: InkWell(
-                                    onTap: _solved ? null : () => _toggle(word),
+                                    onTap:
+                                        _finished ? null : () => _toggle(word),
                                     child: Padding(
                                       padding: const EdgeInsets.all(5),
                                       child: Column(

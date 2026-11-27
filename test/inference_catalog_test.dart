@@ -19,6 +19,7 @@ void main() {
         expect(board.starters, isNot(contains(board.target)));
         final minimum = board.minimumMoves;
         expect(minimum, greaterThan(0));
+        expect(board.maximumMoves, minimum + 5);
         expect(board.starsFor(minimum), 3);
         expect(board.starsFor(minimum + 1), 2);
         expect(board.starsFor(minimum + 2), 2);
