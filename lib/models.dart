@@ -1,7 +1,7 @@
 enum Difficulty {
-  easy(4, 10),
-  normal(8, 15),
-  hard(16, 20);
+  easy(2, 10),
+  normal(3, 15),
+  hard(4, 20);
 
   const Difficulty(this.cardsRequired, this.parSteps);
 
@@ -23,40 +23,110 @@ enum WordAttribute {
 }
 
 class WordItem {
-  const WordItem(this.word, this.emoji, this.attribute);
+  const WordItem(
+    this.word,
+    this.emoji,
+    this.attribute, {
+    String? label,
+    this.koreanLabel,
+    this.recipeSource,
+    this.derivedProximity,
+  }) : label = label ?? word;
 
-  factory WordItem.fromRow(List<dynamic> row) => WordItem(
+  factory WordItem.fromRow(
+    List<dynamic> row, {
+    String? englishLabel,
+    String? koreanLabel,
+  }) => WordItem(
     row[0] as String,
     row[1] as String,
     WordAttribute.values.byName(row[2] as String),
+    label: englishLabel ?? (row.length > 3 ? row[3] as String : null),
+    koreanLabel: koreanLabel,
   );
 
   final String word;
   final String emoji;
   final WordAttribute attribute;
+  final String label;
+  final String? koreanLabel;
+  final WordItem? recipeSource;
+  final int? derivedProximity;
+
+  WordItem get recipeCard => recipeSource ?? this;
+
+  WordItem withRoute({WordItem? substitute, int? proximity}) => WordItem(
+    word,
+    emoji,
+    attribute,
+    label: label,
+    koreanLabel: koreanLabel,
+    recipeSource: substitute ?? recipeCard,
+    derivedProximity: proximity,
+  );
+
+  WordItem replacement() => WordItem(
+    word,
+    emoji,
+    attribute,
+    label: 'Spare ${recipeCard.label}',
+    koreanLabel: '예비 ${recipeCard.koreanLabel ?? recipeCard.label}',
+    recipeSource: recipeCard,
+  );
 }
 
 class CombinationRule {
-  CombinationRule({required List<WordItem> ingredients, required this.result})
-    : ingredients = List.unmodifiable(ingredients),
-      _ingredientSet = ingredients.toSet();
+  CombinationRule({
+    required List<List<WordItem>> groups,
+    required this.result,
+    this.alternate,
+  }) : groups = List.unmodifiable(groups.map(List<WordItem>.unmodifiable)),
+       _slots = {
+         for (final (index, group) in groups.indexed)
+           for (final item in group) item: index,
+       };
 
-  final List<WordItem> ingredients;
-  final Set<WordItem> _ingredientSet;
+  final List<List<WordItem>> groups;
+  final Map<WordItem, int> _slots;
   final WordItem result;
+  final WordItem? alternate;
+  List<WordItem> get ingredients => [for (final group in groups) group.first];
 
-  bool matches(List<WordItem> selection) =>
-      selection.length == ingredients.length &&
-      selection.toSet().length == ingredients.length &&
-      selection.every(_ingredientSet.contains);
+  int? slot(WordItem item) => _slots[item.recipeCard];
+
+  bool matches(List<WordItem> selection) {
+    final selectedSlots = selection.map(slot).toSet();
+    return selection.length == groups.length &&
+        selectedSlots.length == groups.length &&
+        !selectedSlots.contains(null);
+  }
+
+  WordItem resultFor(List<WordItem> selection) {
+    final other = alternate;
+    if (other != null &&
+        selection.any((item) {
+          final index = slot(item)!;
+          return item.recipeCard != groups[index].first;
+        }))
+      return other.withRoute(substitute: result);
+    return result;
+  }
+
+  Iterable<WordItem> missingFrom(Iterable<WordItem> cards) sync* {
+    final present = cards.map(slot).toSet();
+    for (final (index, group) in groups.indexed) {
+      if (!present.contains(index)) yield group.first.replacement();
+    }
+  }
 }
 
 class PuzzleRound {
-  PuzzleRound(this.rule, List<WordItem> stock)
+  PuzzleRound(this.rule, List<WordItem> stock, this.number)
     : stock = List.unmodifiable(stock);
 
   final CombinationRule rule;
   final List<WordItem> stock;
+  final int number;
 }
 
 class Stage {
@@ -79,13 +149,21 @@ class CraftOutcome {
     required this.result,
     required this.proximity,
     required this.isTargetReached,
+    required this.isRecipeMatch,
+    this.isHidden = false,
+    this.missingAttributes = const [],
+    this.lowRelevance = 0,
   });
 
   final List<WordItem> ingredients;
-  final WordItem? result;
-  final int? proximity;
+  final WordItem result;
+  final int proximity;
   final bool isTargetReached;
+  final bool isRecipeMatch;
+  final bool isHidden;
+  final List<WordAttribute> missingAttributes;
+  final int lowRelevance;
 
   String get equation =>
-      '${ingredients.map((item) => item.word).join(' + ')} → ${result?.word ?? '조합 불가'}';
+      '${ingredients.map((item) => item.label).join(' + ')} → ${result.label}';
 }

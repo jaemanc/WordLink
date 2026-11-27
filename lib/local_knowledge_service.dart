@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 
 import 'models.dart';
+import 'word_relations.dart';
 
 class LocalKnowledgeService {
   LocalKnowledgeService._(this.stages, this._words, this._unitVectors);
@@ -30,6 +31,7 @@ class LocalKnowledgeService {
     final assets = await Future.wait([
       readAsset('assets/stages.json'),
       readAsset('assets/embeddings.json'),
+      readAsset('assets/word_labels_ko.json'),
     ]);
     final service = await compute(_decode, assets);
     service._readAsset = readAsset;
@@ -38,9 +40,14 @@ class LocalKnowledgeService {
 
   static LocalKnowledgeService _decode(List<String> assets) {
     final catalog = jsonDecode(assets[0]) as Map<String, dynamic>;
-    final words = (catalog['words'] as List)
-        .map((row) => WordItem.fromRow(row as List))
-        .toList(growable: false);
+    final korean =
+        (jsonDecode(assets[2]) as Map<String, dynamic>).cast<String, String>();
+    final rows = (catalog['stages'] as List).cast<List<dynamic>>();
+    final targetIds = {for (final row in rows) row[1] as int};
+    final words = [
+      for (final (index, raw) in (catalog['words'] as List).indexed)
+        _readWord(raw as List, korean, targetIds.contains(index)),
+    ];
     if (words.map((item) => item.word).toSet().length != words.length) {
       throw const FormatException('Duplicate card names.');
     }
@@ -61,13 +68,27 @@ class LocalKnowledgeService {
       throw const FormatException('A campaign card has no vector.');
     }
 
-    final rows = catalog['stages'] as List;
     final stages = [
       for (final (index, row) in rows.indexed)
-        _readStage(index + 1, row as List, words),
+        _readStage(index + 1, row, words),
     ];
     if (stages.isEmpty) throw const FormatException('Empty campaign.');
     return LocalKnowledgeService._(List.unmodifiable(stages), words, vectors);
+  }
+
+  static WordItem _readWord(
+    List<dynamic> row,
+    Map<String, String> korean,
+    bool isTarget,
+  ) {
+    final word = row.first as String;
+    final label = korean[word];
+    if (label == null) throw FormatException('Missing Korean label: $word');
+    return WordItem.fromRow(
+      row,
+      englishLabel: isTarget ? WordRelations.plainTargetName(word) : null,
+      koreanLabel: isTarget ? label.split(' (').first : label,
+    );
   }
 
   static Stage _readStage(int id, List<dynamic> row, List<WordItem> words) {
@@ -110,19 +131,76 @@ class LocalKnowledgeService {
         ...fresh,
         for (final id in row[2] as List) words[id as int],
       ];
-      final ingredients = [if (carry != null) carry, ...fresh];
-      if (ingredients.length != stage.difficulty.cardsRequired ||
+      if (fresh.length <
+              stage.difficulty.cardsRequired - (carry == null ? 0 : 1) ||
           !stock.every(seen.add) ||
           !seen.add(result) ||
           (result == stage.target) != (index == rows.length - 1)) {
         throw const FormatException('Invalid round inventory or answer.');
       }
-      // The exported rows store recipe cards first. Mix the display order deterministically.
+
+      final alternative = row.length > 3 ? words[row[3] as int] : null;
+      final groupCount =
+          stage.difficulty.cardsRequired - (carry == null ? 0 : 1);
+      final groups = <List<WordItem>>[
+        if (carry != null) [carry],
+        for (final card in fresh.take(groupCount)) [card],
+      ];
+      for (final card in fresh.skip(groupCount)) {
+        final offset = carry == null ? 0 : 1;
+        final compatible =
+            groups
+                .skip(offset)
+                .where((group) => group.first.attribute == card.attribute)
+                .firstOrNull;
+        compatible?.add(card);
+      }
+      if (alternative != null &&
+          groups.every((group) => group.length == 1) &&
+          fresh.length > groupCount) {
+        groups.last.add(fresh[groupCount]);
+      }
+      if (stage.pack == 0 &&
+          stage.position == 0 &&
+          index < WordRelations.supplies.length) {
+        final names = stock.map(WordRelations.materialKey).toSet();
+        stock.addAll(
+          WordRelations.supplies[index].where(
+            (item) => names.add(WordRelations.materialKey(item)),
+          ),
+        );
+      }
+      if (index == 0) {
+        final minimum = switch (stage.difficulty) {
+          Difficulty.easy => 8,
+          Difficulty.normal => 12,
+          Difficulty.hard => 20,
+        };
+        final names = stock.map(WordRelations.materialKey).toSet();
+        final extras = WordRelations.starterExtras;
+        for (
+          var offset = 0;
+          offset < extras.length && stock.length < minimum;
+          offset++
+        ) {
+          final candidate =
+              extras[(stage.pack * 3 + stage.position + offset) %
+                  extras.length];
+          if (names.add(WordRelations.materialKey(candidate))) {
+            stock.add(candidate);
+          }
+        }
+      }
       stock.shuffle(math.Random(result.word.hashCode ^ index));
       rounds.add(
         PuzzleRound(
-          CombinationRule(ingredients: ingredients, result: result),
+          CombinationRule(
+            groups: groups,
+            result: result,
+            alternate: alternative,
+          ),
           stock,
+          index + 1,
         ),
       );
       carry = result;
@@ -130,17 +208,43 @@ class LocalKnowledgeService {
     return List.unmodifiable(rounds);
   }
 
+  late final List<WordItem> catalog = List.unmodifiable(
+    ({
+        for (final item in [
+          ..._words,
+          ...WordRelations.supplies.expand((row) => row),
+          ...WordRelations.starterExtras,
+          ...WordRelations.hidden.values,
+          ...WordRelations.mixtures,
+        ])
+          WordRelations.collectionKey(item.label): item,
+      }.values.toList()
+      ..sort((a, b) => a.label.compareTo(b.label))),
+  );
+
+  double _cosine(String word, String target) {
+    final left = _unitVectors[word];
+    final right = _unitVectors[target];
+    if (left == null || right == null) return 0;
+    var dot = 0.0;
+    for (var i = 0; i < left.length; i++) {
+      dot += left[i] * right[i];
+    }
+    return dot.clamp(0.0, 1.0).toDouble();
+  }
+
+  double _semantic(String word, String target) =>
+      WordRelations.semanticScore(word, target, _cosine(word, target));
+
   int proximity(String word, String target) =>
       _similarities.putIfAbsent((word, target), () {
-        final left = _unitVectors[word];
-        final right = _unitVectors[target];
-        if (left == null || right == null) return 0;
-        var dot = 0.0;
-        for (var i = 0; i < left.length; i++) {
-          dot += left[i] * right[i];
-        }
-        return (dot.clamp(0.0, 1.0) * 100).round();
+        if (word == target) return 100;
+        return (_semantic(word, target) * WordRelations.weights.offPathCeiling)
+            .round();
       });
+
+  int cardProximity(WordItem item, Stage stage) =>
+      item.derivedProximity ?? proximity(item.word, stage.targetWord);
 
   CraftOutcome craft(
     Stage stage,
@@ -148,13 +252,72 @@ class LocalKnowledgeService {
     List<WordItem> ingredients,
   ) {
     final rule = round.rule;
-    final result = rule.matches(ingredients) ? rule.result : null;
+    final matches = rule.matches(ingredients);
+    final hidden = matches ? null : WordRelations.combine(ingredients);
+    final WordItem result;
+    final bool reached;
+    final int score;
+    if (matches) {
+      final output = rule.resultFor(ingredients);
+      reached = output.word == stage.targetWord;
+      final weights = WordRelations.weights;
+      final band = (weights.pathCeiling - weights.pathFloor) / stage.parSteps;
+      final base = weights.pathFloor + (band * (round.number - 1)).floor();
+      final semanticBonus =
+          (math.max(0.0, band - 1) * _semantic(output.word, stage.targetWord))
+              .floor();
+      score = reached ? 100 : base + semanticBonus;
+      result = output.withRoute(
+        substitute: output.recipeSource,
+        proximity: score,
+      );
+    } else {
+      reached = false;
+      final output = hidden ?? WordRelations.fallback(ingredients);
+      final represented =
+          ingredients
+              .where((item) => rule.slot(item) != null)
+              .map((item) => item.recipeCard)
+              .toList()
+            ..sort(
+              (a, b) =>
+                  rule.slot(a)!.compareTo(rule.slot(b)!) != 0
+                      ? rule.slot(a)!.compareTo(rule.slot(b)!)
+                      : a.word.compareTo(b.word),
+            );
+      score =
+          proximity(
+            output.word,
+            stage.targetWord,
+          ).clamp(0, WordRelations.weights.offPathCeiling).toInt();
+      result = output.withRoute(
+        substitute: represented.firstOrNull,
+        proximity: score,
+      );
+    }
+    final occupied = ingredients.map(rule.slot).toSet();
     return CraftOutcome(
       ingredients: List.unmodifiable(ingredients),
       result: result,
-      proximity:
-          result == null ? null : proximity(result.word, stage.targetWord),
-      isTargetReached: result == stage.target,
+      proximity: score,
+      isTargetReached: reached,
+      isRecipeMatch: matches,
+      isHidden: hidden != null,
+      missingAttributes:
+          matches
+              ? const []
+              : List.unmodifiable([
+                for (final (index, group) in rule.groups.indexed)
+                  if (!occupied.contains(index)) group.first.attribute,
+              ]),
+      lowRelevance:
+          matches
+              ? 0
+              : ingredients.where((item) {
+                return rule.slot(item) == null &&
+                    cardProximity(item, stage) <
+                        WordRelations.weights.offPathCeiling ~/ 2;
+              }).length,
     );
   }
 }

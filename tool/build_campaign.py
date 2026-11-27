@@ -164,10 +164,10 @@ def build():
         )
 
 
-    def card(word, kind, theme, score, emoji=None):
+    def card(word, kind, theme, score, emoji=None, label=None):
         if word not in ids:
             ids[word] = len(words)
-            words.append([word, emoji or ICON[kind], kind])
+            words.append([word, emoji or ICON[kind], kind] + ([label] if label else []))
             progress[word] = [0.0] * len(THEMES)
         progress[word][theme] = max(progress[word][theme], score)
         return ids[word]
@@ -195,7 +195,9 @@ def build():
                     if slot >= quota:
                         break
                     rng = random.Random(theme * 1000 + slot)
-                    route = route_for(base, alternatives, slot % 32)
+                    mask = slot % 32
+                    route = route_for(base, alternatives, mask)
+                    counterpart = route_for(base, alternatives, mask ^ 31)
                     edition_label = f" {edition}" if edition_index else ""
                     target = f"{style} {modifier} {route[-1]}{edition_label}"
                     assert target not in ids
@@ -204,33 +206,41 @@ def build():
                     for step, result in enumerate(route):
                         supply_count = size - int(step > 0)
                         batch = BATCHES[step]
-                        available = [name for name in pool if f"{batch} {name}" not in route]
+                        available = [name for name in pool if f"{batch} {name}" not in route and f"{batch} {name}" not in counterpart]
                         raw = rng.sample(available, supply_count)
                         ingredients = [
-                            card(f"{batch} {name}", attribute(name, "material"), theme, .35)
+                            card(f"{batch} {name}", attribute(name, "material"), theme, .35, label=name if step == 0 else None)
                             for name in raw
                         ]
-                        # The variant contributes a distinct ingredient to the first recipe.
-                        if step == 0:
-                            ingredients[0] = card(f"{modifier} Stock", "material", theme, .45)
                         if difficulty == "easy":
                             extras = [
-                                card(f"{batch} {name}", "material", theme, .05)
+                                card(f"{batch} {name}", "material", theme, .05, label=name if step == 0 else None)
                                 for name in rng.sample(DECOYS, distractors)
                             ]
                         else:
                             # Near-miss supplies share the theme, but have visibly low goal relevance.
                             unused = [name for name in pool if name not in raw]
                             extras = [
-                                card(f"Unsorted {batch} {name}", attribute(name, "component"), theme, .08)
+                                card(f"Unsorted {batch} {name}", attribute(name, "component"), theme, .08, label=name if step == 0 else None)
                                 for name in rng.sample(unused, distractors)
                             ]
-                        assert len(set(ingredients + extras)) == supply_count + distractors
+                        if step >= 2:
+                            extras.append(
+                                card(f"Reserve {batch} {rng.choice(DECOYS)}", "material", theme, .1)
+                            )
+                        assert len(set(ingredients + extras)) == supply_count + distractors + (step >= 2)
                         output = target_id if step == depth - 1 else card(
                             result, attribute(result, "component"), theme,
                             round(.4 + .55 * (step + 1) / depth, 3), emoji,
                         )
-                        rounds.append([output, ingredients, extras])
+                        entry = [output, ingredients, extras]
+                        other = counterpart[step]
+                        if other != result:
+                            entry.append(card(
+                                other, attribute(other, "component"), theme,
+                                round(.4 + .55 * (step + 1) / depth, 3), emoji,
+                            ))
+                        rounds.append(entry)
                     stages.append([difficulty, target_id, theme, len(pack)])
                     pack.append(rounds)
         write_rows(packs / f"{theme}.json", pack)
@@ -250,7 +260,7 @@ def build():
         file.write("\n}\n")
     vectors = {}
     target_ids = {stage[1] for stage in stages}
-    for index, (word, _, _) in enumerate(words):
+    for index, (word, *_) in enumerate(words):
         fields = progress[word]
         # A shared final dimension gives sparse theme scores a consistent scale.
         if index not in target_ids:

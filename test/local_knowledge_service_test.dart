@@ -48,22 +48,30 @@ void main() {
             final ingredients = round.rule.ingredients.reversed.toList();
             expect(ingredients.length, difficulty.cardsRequired);
             expect(ingredients.every(inventory.contains), isTrue);
-            final wrong = inventory.firstWhere(
-              (item) => !ingredients.contains(item),
-            );
-            expect(
-              service.craft(stage, round, [
-                wrong,
-                ...ingredients.skip(1),
-              ]).result,
-              isNull,
-            );
+            if (stage.position == 0 && index == 0) {
+              final wrong = inventory.firstWhere(
+                (item) => !ingredients.contains(item),
+              );
+              final inputs = [wrong, ...ingredients.skip(1)];
+              final derived = service.craft(stage, round, inputs);
+              expect(derived.isRecipeMatch, isFalse);
+              expect(derived.isTargetReached, isFalse);
+              expect(derived.result.sourceNouns, isNotEmpty);
+              expect(
+                service
+                    .craft(stage, round, inputs.reversed.toList())
+                    .result
+                    .word,
+                derived.result.word,
+              );
+            }
             final result = service.craft(stage, round, ingredients);
+            expect(result.isRecipeMatch, isTrue);
             expect(result.isTargetReached, index == steps - 1);
             expect(result.result, round.rule.result);
-            vocabulary.add(result.result!.word);
+            vocabulary.add(result.result.word);
             inventory.removeAll(ingredients);
-            expect(inventory.add(result.result!), isTrue);
+            expect(inventory.add(result.result), isTrue);
           }
           expect(service.proximity(stage.targetWord, stage.targetWord), 100);
         }

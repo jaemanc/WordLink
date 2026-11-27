@@ -7,6 +7,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   flutter_riverpod: ^3.5.0
 dev_dependencies:
   flutter_test:
@@ -17,5 +19,8 @@ flutter:
   assets:
     - assets/stages.json
     - assets/embeddings.json
+    - assets/word_labels_ko.json
     - assets/craft_impact.wav
+    - assets/workshop_background.jpg
     - assets/puzzles/
+    - assets/inference/

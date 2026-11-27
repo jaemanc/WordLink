@@ -20,6 +20,19 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(impactChannel, null));
 
+    const settingsChannel = MethodChannel('wordlink/settings');
+    var savedLanguage = 'ko';
+    messenger.setMockMethodCallHandler(settingsChannel, (call) async {
+      if (call.method == 'getLanguage') return savedLanguage;
+      if (call.method == 'setLanguage') {
+        savedLanguage = call.arguments as String;
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(settingsChannel, null),
+    );
+
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(360, 740);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -58,9 +71,31 @@ void main() {
     );
     await settleStage();
 
-    await tester.tap(find.text('HARD 16장'));
+    await tester.tap(find.byTooltip('설정'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('English'));
+    await tester.pumpAndSettle();
+    expect(find.text('TARGET WORD'), findsOneWidget);
+    expect(savedLanguage, 'en');
+
+    final starter = container.read(gameProvider).requireValue.inventory.first;
+    final source = find.text(starter.label);
+    final dropZone = find.byKey(const ValueKey('workbench-drop-zone'));
+    await tester.ensureVisible(source);
+    await tester.pumpAndSettle();
+    final drag = await tester.startGesture(tester.getCenter(source));
+    await tester.pump(const Duration(milliseconds: 550));
+    await drag.moveTo(tester.getCenter(dropZone));
+    await tester.pump();
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(container.read(gameProvider).requireValue.selected, [starter]);
+
+    await tester.drag(find.byType(ListView).first, const Offset(0, 350));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('HARD'));
     await settleStage();
-    await tester.tap(find.text('문제 1 / 10000'));
+    await tester.tap(find.byTooltip('Puzzle 1 / 10000'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '10000');
     await tester.pumpAndSettle();
@@ -81,42 +116,45 @@ void main() {
       controller.toggle(item);
     }
     await tester.pumpAndSettle();
-    await tester.tap(find.text('조합하기'));
+    await tester.tap(find.text('Combine'));
     await tester.pumpAndSettle();
-    expect(
-      container.read(gameProvider).requireValue.inventory,
-      initial.inventory,
-    );
+    final experiment = container.read(gameProvider).requireValue;
+    expect(experiment.completedRounds, 0);
+    expect(experiment.latest!.isRecipeMatch, isFalse);
+    expect(experiment.inventory, contains(experiment.latest!.result));
+    expect(experiment.inventory, isNot(contains(wrong)));
+    expect(sounds, hasLength(1));
 
-    controller.clearSelection();
-    for (final item in ingredients) {
+    for (final item in experiment.recipeCards) {
       controller.toggle(item);
     }
     await tester.pumpAndSettle();
-    expect(find.text('16 / 16장'), findsOneWidget);
-    await tester.tap(find.text('조합하기'));
+    expect(find.text('16 / 16'), findsOneWidget);
+    await tester.tap(find.text('Combine'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     final approach = tester.widget<CraftImpact>(find.byType(CraftImpact));
     expect(approach.cards, hasLength(16));
     expect(approach.progress, lessThan(CraftImpact.collision));
-    expect(sounds, isEmpty);
+    expect(sounds, hasLength(1));
 
     await tester.pump(const Duration(milliseconds: 90));
     await tester.pump();
-    expect(sounds.single.method, 'play');
-    expect(sounds.single.arguments, false);
+    expect(sounds.last.method, 'play');
+    expect(sounds.last.arguments, false);
     await tester.pumpAndSettle();
     expect(find.byType(CraftImpact), findsNothing);
 
     final crafted = container.read(gameProvider).requireValue;
     expect(crafted.completedRounds, 1);
     expect(crafted.inventory, contains(round.rule.result));
-    expect(crafted.inventory, contains(wrong));
+    expect(experiment.recipeCards, contains(experiment.latest!.result));
+    expect(crafted.inventory, isNot(contains(experiment.latest!.result)));
+    expect(crafted.inventory.length, greaterThan(initial.inventory.length));
     expect(crafted.inventory.any(ingredients.contains), isFalse);
     expect(crafted.inventory, containsAll(initial.rounds[1].stock));
 
-    await tester.tap(find.byTooltip('다시 시작'));
+    await tester.tap(find.byTooltip('Restart'));
     await tester.pumpAndSettle();
     final reset = container.read(gameProvider).requireValue;
     expect(reset.stage, stage);

@@ -1,0 +1,169 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+final inferenceCatalogProvider = FutureProvider(
+  (ref) => InferenceCatalog.load(),
+);
+
+class InferenceWord {
+  const InferenceWord(this.english, this.korean);
+  final String english;
+  final String korean;
+
+  String label(bool koreanMode) => koreanMode ? korean : english;
+}
+
+class InferenceBoard {
+  const InferenceBoard(this.target, this.starters, this.scores);
+  final int target;
+  final List<int> starters;
+  final List<int> scores;
+
+  int proximity(int word) => scores[word];
+}
+
+class InferenceCatalog {
+  InferenceCatalog._(this.words, this._recipes, this._scores, this.handSize);
+
+  final List<InferenceWord> words;
+  final Map<(int, int), int> _recipes;
+  final Map<int, List<int>> _scores;
+  final int handSize;
+  final _packs = <int, List<List<int>>>{};
+  final _random = Random();
+
+  late final _english = _wordIndex(false);
+  late final _korean = _wordIndex(true);
+
+  static Future<InferenceCatalog> load() async {
+    final json =
+        jsonDecode(await rootBundle.loadString('assets/inference/engine.json'))
+            as Map<String, dynamic>;
+    return InferenceCatalog._(
+      List.unmodifiable([
+        for (final row in (json['words'] as List).cast<List<dynamic>>())
+          InferenceWord(row[0] as String, row[1] as String),
+      ]),
+      {
+        for (final row in (json['recipes'] as List).cast<List<dynamic>>())
+          _key(row[0] as int, row[1] as int): row[2] as int,
+      },
+      {
+        for (final entry in (json['scores'] as Map<String, dynamic>).entries)
+          int.parse(entry.key): List<int>.unmodifiable(entry.value as List),
+      },
+      json['handSize'] as int,
+    );
+  }
+
+  static (int, int) _key(int a, int b) => a < b ? (a, b) : (b, a);
+  int? recipeResult(int a, int b) => _recipes[_key(a, b)];
+
+  (int, int)? suggestPair(InferenceBoard board, Set<int> available) {
+    (int, int)? best;
+    (int, int)? answerPair;
+    var bestScore = -1;
+    for (final entry in _recipes.entries) {
+      final (a, b) = entry.key;
+      if (!available.contains(a) ||
+          !available.contains(b) ||
+          available.contains(entry.value)) {
+        continue;
+      }
+      if (entry.value == board.target) {
+        answerPair ??= entry.key;
+        continue;
+      }
+      final score = board.proximity(entry.value);
+      if (score > bestScore) {
+        best = entry.key;
+        bestScore = score;
+      }
+    }
+    return best ?? answerPair;
+  }
+
+  static String _normalize(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
+  Map<String, List<int>> _wordIndex(bool korean) {
+    final result = <String, List<int>>{};
+    for (final (index, word) in words.indexed) {
+      (result[_normalize(word.label(korean))] ??= []).add(index);
+    }
+    return result;
+  }
+
+  List<int> find(String word, bool korean) =>
+      (korean ? _korean : _english)[_normalize(word)] ?? const [];
+
+  Future<List<List<int>>> _loadPack(int difficulty) async {
+    final cached = _packs[difficulty];
+    if (cached != null) return cached;
+    final json =
+        jsonDecode(
+              await rootBundle.loadString(
+                'assets/inference/level_$difficulty.json',
+                cache: false,
+              ),
+            )
+            as List;
+    final pack = List<List<int>>.unmodifiable(
+      json.map((row) => List<int>.unmodifiable(row as List)),
+    );
+    return _packs[difficulty] = pack;
+  }
+
+  Future<InferenceBoard?> next(
+    int difficulty, {
+    int? previousTarget,
+    List<int>? requestedTargets,
+  }) async {
+    final pack = await _loadPack(difficulty);
+    final candidates =
+        pack
+            .where(
+              (row) =>
+                  requestedTargets != null
+                      ? requestedTargets.contains(row.first)
+                      : row.first != previousTarget,
+            )
+            .toList();
+    while (candidates.isNotEmpty) {
+      final chosen = candidates.removeAt(_random.nextInt(candidates.length));
+      final target = chosen.first;
+      final scores = _scores[target];
+      final starters = List<int>.unmodifiable(chosen.skip(1));
+      if (scores != null && _canPlay(target, starters, scores)) {
+        return InferenceBoard(target, starters, scores);
+      }
+    }
+    return null;
+  }
+
+  bool _canPlay(int target, List<int> starters, List<int> scores) {
+    final reached = starters.toSet();
+    if (starters.length != handSize ||
+        reached.length != handSize ||
+        reached.contains(target) ||
+        starters.any(
+          (word) => word < 0 || word >= scores.length || scores[word] < 10,
+        )) {
+      return false;
+    }
+    while (true) {
+      final size = reached.length;
+      for (final entry in _recipes.entries) {
+        final (a, b) = entry.key;
+        if (reached.contains(a) && reached.contains(b)) {
+          reached.add(entry.value);
+        }
+      }
+      if (reached.contains(target)) return true;
+      if (reached.length == size) return false;
+    }
+  }
+}

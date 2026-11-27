@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'game_language.dart';
 import 'models.dart';
 
 class CraftImpact extends StatelessWidget {
@@ -11,6 +12,9 @@ class CraftImpact extends StatelessWidget {
     required this.center,
     required this.cards,
     required this.outcome,
+    this.destination,
+    this.isNew = false,
+    this.newBest = false,
   });
 
   static const collision = .34;
@@ -19,6 +23,9 @@ class CraftImpact extends StatelessWidget {
   final Offset center;
   final List<({WordItem item, Offset from})> cards;
   final CraftOutcome? outcome;
+  final Offset? destination;
+  final bool isNew;
+  final bool newBest;
 
   double get aftermath =>
       ((progress - collision) / (1 - collision)).clamp(0, 1).toDouble();
@@ -26,7 +33,7 @@ class CraftImpact extends StatelessWidget {
   Offset get recoil {
     final t = aftermath;
     final strength =
-        outcome?.isTargetReached == true
+        outcome?.isTargetReached == true || newBest
             ? 14.0
             : outcome?.result != null
             ? 9.0
@@ -40,12 +47,16 @@ class CraftImpact extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final result = outcome?.result;
     final hitColor =
-        outcome?.isTargetReached == true
+        outcome?.isTargetReached == true || newBest
             ? const Color(0xffffc65c)
-            : result != null
-            ? colors.primary
-            : colors.error;
+            : outcome?.isRecipeMatch == false
+            ? const Color(0xffffcc86)
+            : colors.primary;
     final t = aftermath;
+    final transfer = Curves.easeInOut.transform(
+      ((t - .34) / .66).clamp(0.0, 1.0).toDouble(),
+    );
+    final landing = Offset.lerp(center, destination ?? center, transfer)!;
     return ExcludeSemantics(
       child: IgnorePointer(
         child: Stack(
@@ -53,7 +64,7 @@ class CraftImpact extends StatelessWidget {
           children: [
             if (progress < collision)
               for (final (index, card) in cards.indexed)
-                _flyingCard(card, index, colors),
+                _flyingCard(context, card, index, colors),
             if (progress >= collision && outcome != null) ...[
               Positioned.fill(
                 child: CustomPaint(
@@ -62,10 +73,10 @@ class CraftImpact extends StatelessWidget {
               ),
               if (result != null)
                 Positioned(
-                  left: center.dx,
-                  top: center.dy,
+                  left: landing.dx,
+                  top: landing.dy,
                   child: FractionalTranslation(
-                    translation: Offset(-.5, -.5 - .12 * t),
+                    translation: const Offset(-.5, -.5),
                     child: Opacity(
                       opacity: ((1 - t) * 4).clamp(0, 1).toDouble(),
                       child: Transform.scale(
@@ -73,7 +84,7 @@ class CraftImpact extends StatelessWidget {
                             t < .23
                                 ? .45 +
                                     Curves.easeOutBack.transform(t / .23) * .67
-                                : 1.12 - .12 * (t - .23) / .77,
+                                : 1.12 - .45 * transfer,
                         child: Container(
                           constraints: const BoxConstraints(maxWidth: 210),
                           padding: const EdgeInsets.symmetric(
@@ -92,7 +103,7 @@ class CraftImpact extends StatelessWidget {
                             ],
                           ),
                           child: Text(
-                            '${result.emoji} ${result.word}',
+                            '${isNew ? gameText(context, '신규  ', 'NEW  ') : ''}${result.emoji} ${gameWord(context, result)}',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: hitColor,
@@ -112,6 +123,7 @@ class CraftImpact extends StatelessWidget {
   }
 
   Widget _flyingCard(
+    BuildContext context,
     ({WordItem item, Offset from}) card,
     int index,
     ColorScheme colors,
@@ -140,7 +152,7 @@ class CraftImpact extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
                 child: Text(
-                  '${card.item.emoji} ${card.item.word}',
+                  '${card.item.emoji} ${gameWord(context, card.item)}',
                   style: TextStyle(
                     color: colors.onPrimaryContainer,
                     fontSize: 11,
