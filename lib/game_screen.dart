@@ -26,7 +26,6 @@ class _GameScreenState extends ConsumerState<GameScreen>
     vsync: this,
     duration: const Duration(milliseconds: 510),
   );
-  static const _audio = MethodChannel('wordlink/impact');
   final _effectsSurface = GlobalKey();
   final _workbench = GlobalKey();
   final _inventoryGrid = GlobalKey();
@@ -124,15 +123,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
     final outcome = ref.read(gameProvider).asData?.value.latest;
     if (outcome == null) return;
     HapticFeedback.heavyImpact();
-    unawaited(_playImpactSound(outcome.isTargetReached));
-  }
-
-  Future<void> _playImpactSound(bool cleared) async {
-    try {
-      await _audio.invokeMethod<void>('play', cleared);
-    } on MissingPluginException {
-      await SystemSound.play(SystemSoundType.click);
-    }
+    unawaited(playImpactSound(cleared: outcome.isTargetReached));
   }
 
   Widget _withImpact(Widget child) => AnimatedBuilder(

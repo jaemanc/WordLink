@@ -1,20 +1,19 @@
 """Build offline WordLink inference boards with a proof for each starting hand."""
 import heapq
 from functools import lru_cache
+from itertools import combinations
 import json
+import logging
 import random
 from collections import defaultdict
 from pathlib import Path
 
-from review_inference_recipes import validate_recipe_labels, verdict
+from review_inference_recipes import candidate_priority, validate_recipe_labels, verdict
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets/inference"
 BOARDS_PER_LEVEL = 10_000
 HAND_SIZE = 16
 SCORES = (100, 88, 76, 64, 52, 43, 35, 28, 22, 17, 14, 12, 10)
-RELATION_RANK = {name: rank for rank, name in enumerate(
-    ("function", "physical", "purpose", "association")
-)}
 
 
 def bake():
@@ -34,8 +33,7 @@ def bake():
         validate_recipe_labels(a, b, result)
         validate_recipe_labels(words[a], words[b], words[result])
         recipes[pair] = result
-        if result not in starter_words:
-            reverse[result].append(pair)
+        reverse[result].append(pair)
         link(a, result, 1)
         link(b, result, 1)
 
@@ -47,13 +45,24 @@ def bake():
         add_recipe(pair, result)
     for a, b, result in data["alternativeRecipes"]:
         pair = tuple(sorted((a, b)))
-        if pair in recipes or result not in reverse or not {a, b} <= words.keys():
+        if pair in recipes or result not in reverse or result in starter_words or not {a, b} <= words.keys():
             raise ValueError(f"Invalid or duplicate alternative: {pair} -> {result}")
         add_recipe(pair, result)
 
     candidates = []
     known_ingredients = set(words)
-    for entry in data["semanticRecipes"]:
+    entries = list(data["semanticRecipes"])
+    for result, korean, members in data["sharedConcepts"]:
+        for a, b in combinations(members, 2):
+            entries.append({
+                "inputs": [a, b], "result": result, "korean": korean,
+                "relation": "umbrella", "concrete": False,
+                "connections": [f"{word} is a member of {result}." for word in (a, b)],
+                "existenceEvidence": "Reviewed dictionary category.",
+                "scores": dict(existence=25, logic=23, intuition=15, independence=12, gameplay=5),
+                "hardReject": False, "explainable": True,
+            })
+    for entry in entries:
         a, b = entry["inputs"]
         if a == b or not {a, b} <= known_ingredients:
             raise ValueError(f"Invalid semantic recipe inputs: {entry['inputs']}")
@@ -61,7 +70,7 @@ def bake():
         if verdict(entry, pair) != "approve":
             continue
         result, korean = entry["result"], entry["korean"]
-        priority = (RELATION_RANK[entry["relation"]], not entry["concrete"])
+        priority = candidate_priority(entry)
         candidates.append((priority, tuple(sorted((a, b))), result, korean))
 
     for _, pair, result, korean in sorted(candidates):
@@ -93,14 +102,14 @@ def bake():
 
     @lru_cache(maxsize=None)
     def proofs(word):
-        if word in starter_words:
-            return ((frozenset({word}), frozenset()),)
         found = {
             (left | right, left_steps | right_steps | {word})
-            for a, b in reverse[word]
+            for a, b in reverse.get(word, ())
             for left, left_steps in proofs(a)
             for right, right_steps in proofs(b)
         }
+        if word in starter_words:
+            found.add((frozenset({word}), frozenset()))
         return tuple(sorted(found, key=lambda proof: (len(proof[1]), sorted(proof[0]), sorted(proof[1]))))
 
     def closure(hand):
@@ -115,22 +124,26 @@ def bake():
 
     goals = [[], [], []]
     scores = {}
-    for target in reverse:
+    answer_words = data["answerWords"]
+    if len(set(answer_words)) != len(answer_words):
+        raise ValueError("Duplicate reviewed answer")
+    for target in answer_words:
+        if target not in reverse or any(not 1 <= len(label.split()) <= 3
+                                        for label in (target, words[target])):
+            raise ValueError(f"Invalid reviewed answer: {target}")
         paths = proofs(target)
         near_scores = distances(target)
-        nearby = sorted(word for word in starter_words if near_scores[word] >= 10)
+        nearby = sorted(word for word in starter_words - {target} if near_scores[word] >= 10)
         nearby_set = set(nearby)
         available_paths = [(needed, steps) for needed, steps in paths if needed <= nearby_set]
         if len(nearby) < HAND_SIZE or not available_paths:
-            continue
+            raise ValueError(f"No playable hand for reviewed answer: {target}")
         moves = len(available_paths[0][1])
-        if not any(len(steps) >= 2 for _, steps in available_paths):
-            continue
         level = 0 if moves <= 2 else 1 if moves == 3 else 2
         path_words = set().union(*(steps for _, steps in paths))
         traps = [
             (word, trap_inputs)
-            for word in sorted(reverse.keys() - path_words)
+            for word in sorted(reverse.keys() - path_words - starter_words)
             if 25 <= near_scores[word] < 100
             for trap_inputs, _ in proofs(word)
             if trap_inputs <= nearby_set
@@ -150,7 +163,7 @@ def bake():
                             candidates.add((branched, trap, True))
         candidates = sorted(candidates, key=lambda entry: (entry[2], sorted(entry[0]), entry[1]))
         if not candidates:
-            continue
+            raise ValueError(f"No suitable distractor for reviewed answer: {target}")
         goals[level].append((target, nearby, candidates, available_paths, moves))
         scores[ids[target]] = list(near_scores.values())
 
@@ -181,7 +194,7 @@ def bake():
             assert all(scores[ids[target]][word] >= 10 for word in starter_ids)
             multiple_routes += len(distances_in_hand) > 1
             seen.add(starter_ids)
-            boards.append(board)
+            boards.append((*board, min(distances_in_hand)))
         (ASSETS / f"level_{level}.json").write_text(
             "[\n" + ",\n".join(json.dumps(row, separators=(",", ":")) for row in boards) + "\n]\n",
             encoding="utf-8",
@@ -204,4 +217,5 @@ def bake():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     bake()

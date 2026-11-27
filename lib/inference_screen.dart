@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'campaign_progress.dart';
+import 'craft_impact.dart';
 import 'game_language.dart';
 import 'inference_catalog.dart';
 import 'models.dart';
@@ -13,7 +18,23 @@ class InferenceScreen extends ConsumerStatefulWidget {
   ConsumerState<InferenceScreen> createState() => _InferenceScreenState();
 }
 
-class _InferenceScreenState extends ConsumerState<InferenceScreen> {
+enum _WordSort { proximity, recent, name }
+
+class _InferenceScreenState extends ConsumerState<InferenceScreen>
+    with SingleTickerProviderStateMixin {
+  late final _selectionImpact = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  );
+  final _scroll = ScrollController();
+  int _moves = 0;
+  bool _newRecord = false;
+  String? _stageKey;
+  final _discovered = <int, int>{};
+  final _craftDepth = <int, int>{};
+  _WordSort _sort = _WordSort.proximity;
+  int? _impactWord;
+
   InferenceBoard? _board;
   Difficulty _difficulty = Difficulty.easy;
   final _available = <int>{};
@@ -38,6 +59,13 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
     );
   }
 
+  @override
+  void dispose() {
+    _selectionImpact.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
   Future<void> _start(Difficulty difficulty, {String? target}) async {
     if (!mounted) return;
     final korean = _korean;
@@ -55,6 +83,8 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
         requestedTargets: target == null ? null : catalog.find(target, korean),
       );
       if (!mounted) return;
+      await ref.read(progressProvider.future);
+      if (!mounted) return;
       setState(() {
         _loading = false;
         if (board == null) {
@@ -66,15 +96,8 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
         }
         _difficulty = difficulty;
         _board = board;
-        _selection.clear();
-        _history.clear();
-        _available
-          ..clear()
-          ..addAll(board.starters);
-        _tray
-          ..clear()
-          ..addAll(board.starters);
-        _solved = false;
+        _stageKey = catalog.recordKey(difficulty.index, board);
+        _resetRun(board);
       });
     } catch (_) {
       if (!mounted) return;
@@ -85,15 +108,97 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
     }
   }
 
+  void _resetRun(InferenceBoard board) {
+    _moves = 0;
+    _newRecord = false;
+    _message = null;
+    _recipeClue = null;
+    _selection.clear();
+    _history.clear();
+    _discovered.clear();
+    _craftDepth.clear();
+    _impactWord = null;
+    _available
+      ..clear()
+      ..addAll(board.starters);
+    _tray
+      ..clear()
+      ..addAll(board.starters);
+    _solved = false;
+  }
+
   void _toggle(int word) {
     if (_solved || _loading) return;
+    final selecting = !_selection.contains(word);
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     setState(() {
       _message = null;
-      if (_selection.remove(word)) return;
+      if (!selecting) {
+        _selection.remove(word);
+        if (_impactWord == word) _impactWord = null;
+        return;
+      }
       if (_selection.length == 2) _selection.removeLast();
       _selection.add(word);
+      _impactWord = reduceMotion ? null : word;
+    });
+    if (selecting) {
+      if (!reduceMotion) _selectionImpact.forward(from: 0);
+      unawaited(HapticFeedback.heavyImpact());
+      unawaited(playImpactSound(cleared: false));
+    }
+  }
+
+  String _sortLabel(_WordSort sort) => switch (sort) {
+    _WordSort.proximity => _tr('유사도순', 'Similarity'),
+    _WordSort.recent => _tr('최근 발견순', 'Recently found'),
+    _WordSort.name => _tr('이름 순', 'Name'),
+  };
+
+  void _sortWords(
+    List<int> words,
+    InferenceCatalog catalog,
+    InferenceBoard board,
+  ) {
+    final korean = _korean;
+    words.sort((a, b) {
+      final order = switch (_sort) {
+        _WordSort.proximity => _score(board, b).compareTo(_score(board, a)),
+        _WordSort.recent => (_discovered[b] ?? 0).compareTo(
+          _discovered[a] ?? 0,
+        ),
+        _WordSort.name => 0,
+      };
+      if (order != 0) return order;
+      final nameOrder = catalog.words[a]
+          .label(korean)
+          .toLowerCase()
+          .compareTo(catalog.words[b].label(korean).toLowerCase());
+      return nameOrder == 0 ? a.compareTo(b) : nameOrder;
     });
   }
+
+  Widget _withSelectionImpact(Widget card, Color color) => AnimatedBuilder(
+    animation: _selectionImpact,
+    child: card,
+    builder: (context, child) {
+      final progress = _selectionImpact.value;
+      if (progress >= 1) return child!;
+      final recoil = 1 - Curves.easeOutCubic.transform(progress);
+      return Stack(
+        fit: StackFit.expand,
+        clipBehavior: Clip.none,
+        children: [
+          Transform.scale(scale: 1 + .12 * recoil, child: child),
+          IgnorePointer(
+            child: CustomPaint(
+              painter: ImpactBurstPainter(null, progress, color, false),
+            ),
+          ),
+        ],
+      );
+    },
+  );
 
   InferenceWord _word(InferenceCatalog catalog, int id) => catalog.words[id];
 
@@ -114,6 +219,7 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
     final result = catalog.recipeResult(a, b);
     if (result == null) {
       setState(() {
+        _moves++;
         _message = _tr(
           '두 단어를 함께 설명하는 결과를 찾지 못했어요. 한 장을 바꿔 보세요.',
           'No known result connects both words. Try swapping one card.',
@@ -140,15 +246,43 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
       _message = null;
       _recipeClue = null;
       _selection.clear();
+      _impactWord = null;
       _history.add((inputs: inputs, result: result));
       if (handSize != null) {
-        _available.add(result);
+        _moves++;
+        if (_available.add(result)) {
+          _discovered[result] = _history.length;
+          _craftDepth[result] =
+              1 +
+              math.max(
+                _craftDepth[inputs[0]] ?? 0,
+                _craftDepth[inputs[1]] ?? 0,
+              );
+        }
         _bringToTray(handSize, [result]);
       }
       _solved = result == board.target;
+      if (_solved) {
+        _newRecord = ref
+            .read(progressProvider.notifier)
+            .recordInference(_stageKey!, _moves, board.starsFor(_moves));
+      }
     });
     if (_solved) {
       HapticFeedback.heavyImpact();
+      if (_scroll.hasClients) {
+        if (MediaQuery.disableAnimationsOf(context)) {
+          _scroll.jumpTo(0);
+        } else {
+          unawaited(
+            _scroll.animateTo(
+              0,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+            ),
+          );
+        }
+      }
     } else {
       HapticFeedback.selectionClick();
     }
@@ -214,17 +348,28 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
     _record(matches.contains(target) ? target : matches.first, const []);
   }
 
+  ({Color surface, Color accent}) _cardColors(
+    int word,
+  ) => switch (_craftDepth[word] ?? 0) {
+    0 => (surface: const Color(0xff24484e), accent: const Color(0xff9ac6c7)),
+    1 => (surface: const Color(0xff234b37), accent: const Color(0xff8ce8ac)),
+    2 => (surface: const Color(0xff253e60), accent: const Color(0xff9ecbff)),
+    3 => (surface: const Color(0xff49325d), accent: const Color(0xffe0b6ff)),
+    _ => (surface: const Color(0xff554125), accent: const Color(0xffffd580)),
+  };
+
+  String _cardDetail(InferenceBoard board, int word) {
+    final depth = _craftDepth[word];
+    final level = depth == null ? _tr('기본', 'Base') : 'Lv.$depth';
+    return '$level · ${_score(board, word)}%';
+  }
+
   Future<void> _openReserve(
     InferenceCatalog catalog,
     InferenceBoard board,
   ) async {
     final reserves = _available.where((id) => !_tray.contains(id)).toList();
-    reserves.sort(
-      (a, b) => _word(
-        catalog,
-        a,
-      ).label(_korean).compareTo(_word(catalog, b).label(_korean)),
-    );
+    _sortWords(reserves, catalog, board);
     final chosen = await showModalBottomSheet<int>(
       context: context,
       useSafeArea: true,
@@ -235,7 +380,11 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
               final id = reserves[index];
               return ListTile(
                 title: Text(_word(catalog, id).label(_korean)),
-                trailing: Text('${_score(board, id)}%'),
+                tileColor: _cardColors(id).surface,
+                trailing: Text(
+                  _cardDetail(board, id),
+                  style: TextStyle(color: _cardColors(id).accent),
+                ),
                 onTap: () => Navigator.of(context).pop(id),
               );
             },
@@ -252,19 +401,88 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
     Difficulty.hard => _tr('어려움', 'Hard'),
   };
 
+  Widget _stars(int count) => Semantics(
+    label: _tr('별 3개 중 $count개', '$count of 3 stars'),
+    child: ExcludeSemantics(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var index = 0; index < 3; index++)
+            Icon(
+              index < count ? Icons.star_rounded : Icons.star_outline_rounded,
+              color: const Color(0xffffd580),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _runSummary(InferenceBoard board, StageRecord? record) {
+    final stars = board.starsFor(_moves);
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return Column(
+      children: [
+        Text(
+          _tr(
+            '최소 조합 ${board.minimumMoves}회 · ${_solved ? '사용' : '현재'} $_moves회',
+            'Minimum ${board.minimumMoves} · ${_solved ? 'Used' : 'Current'} $_moves',
+          ),
+          textAlign: TextAlign.center,
+        ),
+        if (_solved)
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: reduceMotion ? 1 : .45, end: 1),
+            duration:
+                reduceMotion
+                    ? Duration.zero
+                    : const Duration(milliseconds: 450),
+            curve: Curves.easeOutBack,
+            builder:
+                (context, scale, child) =>
+                    Transform.scale(scale: scale, child: child),
+            child: Column(
+              children: [
+                _stars(stars),
+                if (_newRecord)
+                  Text(
+                    _tr('신기록!', 'New record!'),
+                    style: const TextStyle(
+                      color: Color(0xffffd580),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+              ],
+            ),
+          )
+        else
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(child: Text(_tr('예상 별점', 'Projected'))),
+              const SizedBox(width: 6),
+              _stars(stars),
+            ],
+          ),
+        if (record != null)
+          Text(
+            _tr(
+              '최고 기록 ${record.moves}회 · 별 ${record.stars}개',
+              'Best ${record.moves} attempts · ${record.stars} stars',
+            ),
+            textAlign: TextAlign.center,
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final catalog = ref.watch(inferenceCatalogProvider).asData?.value;
     final board = _board;
+    final record =
+        ref.watch(progressProvider).asData?.value.inferenceRecords[_stageKey];
     final words = [..._tray];
-    if (catalog != null) {
-      words.sort(
-        (a, b) => _word(catalog, a)
-            .label(_korean)
-            .toLowerCase()
-            .compareTo(_word(catalog, b).label(_korean).toLowerCase()),
-      );
-    }
+    if (catalog != null && board != null) _sortWords(words, catalog, board);
     final last = _history.lastOrNull;
     final score =
         last == null || board == null ? 0 : _score(board, last.result);
@@ -308,18 +526,36 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                     alignment: WrapAlignment.center,
                     spacing: 10,
                     children: [
-                      OutlinedButton(
-                        onPressed: _solved ? null : () => _guess(catalog),
-                        child: Text(_tr('정답 입력', 'Guess answer')),
-                      ),
-                      FilledButton.icon(
-                        onPressed:
-                            _selection.length != 2 || _solved
-                                ? null
-                                : () => _combine(catalog),
-                        icon: const Icon(Icons.bolt),
-                        label: Text(_tr('조합하기', 'Combine')),
-                      ),
+                      if (_solved) ...[
+                        OutlinedButton(
+                          onPressed: () {
+                            setState(() => _resetRun(board));
+                            if (_scroll.hasClients) _scroll.jumpTo(0);
+                          },
+                          child: Text(
+                            board.starsFor(_moves) < 3
+                                ? _tr('별 3개 재도전', 'Retry for 3 stars')
+                                : _tr('재도전', 'Retry'),
+                          ),
+                        ),
+                        FilledButton(
+                          onPressed: () => _start(_difficulty),
+                          child: Text(_tr('다음 문제', 'Next puzzle')),
+                        ),
+                      ] else ...[
+                        OutlinedButton(
+                          onPressed: _solved ? null : () => _guess(catalog),
+                          child: Text(_tr('정답 입력', 'Guess answer')),
+                        ),
+                        FilledButton.icon(
+                          onPressed:
+                              _selection.length != 2 || _solved
+                                  ? null
+                                  : () => _combine(catalog),
+                          icon: const Icon(Icons.bolt),
+                          label: Text(_tr('조합하기', 'Combine')),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -341,6 +577,7 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 570),
                       child: CustomScrollView(
+                        controller: _scroll,
                         slivers: [
                           SliverPadding(
                             padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -383,6 +620,8 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                                                     : colors.primary,
                                           ),
                                         ),
+                                        const SizedBox(height: 6),
+                                        _runSummary(board, record),
                                         const SizedBox(height: 6),
                                         Text(
                                           _tr(
@@ -439,6 +678,11 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                                     children: [
                                       for (final word in _selection)
                                         InputChip(
+                                          backgroundColor:
+                                              _cardColors(word).surface,
+                                          side: BorderSide(
+                                            color: _cardColors(word).accent,
+                                          ),
                                           label: Text(
                                             _word(catalog, word).label(_korean),
                                           ),
@@ -492,19 +736,53 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                                       textAlign: TextAlign.center,
                                     ),
                                   ),
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 9,
-                                  ),
-                                  child: Text(
-                                    _tr(
-                                      '보유 단어 ${words.length}',
-                                      'Words ${words.length}',
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        _tr(
+                                          '보유 단어 ${words.length}',
+                                          'Words ${words.length}',
+                                        ),
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
                                     ),
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
+                                    PopupMenuButton<_WordSort>(
+                                      tooltip: _tr('보유 단어 정렬', 'Sort words'),
+                                      initialValue: _sort,
+                                      onSelected:
+                                          (sort) =>
+                                              setState(() => _sort = sort),
+                                      itemBuilder:
+                                          (context) => [
+                                            for (final sort in _WordSort.values)
+                                              CheckedPopupMenuItem(
+                                                value: sort,
+                                                checked: sort == _sort,
+                                                child: Text(_sortLabel(sort)),
+                                              ),
+                                          ],
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 12,
+                                          horizontal: 4,
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(Icons.sort, size: 18),
+                                            const SizedBox(width: 6),
+                                            Text(_sortLabel(_sort)),
+                                            const Icon(Icons.arrow_drop_down),
+                                          ],
+                                        ),
+                                      ),
                                     ),
-                                  ),
+                                  ],
                                 ),
                                 if (_available.length > words.length)
                                   Align(
@@ -545,18 +823,27 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                               itemBuilder: (context, index) {
                                 final word = words[index];
                                 final selected = _selection.contains(word);
-                                return Material(
+                                final palette = _cardColors(word);
+                                final card = Material(
                                   color:
                                       selected
-                                          ? colors.primaryContainer
-                                          : const Color(0xff24484e),
+                                          ? Color.alphaBlend(
+                                            palette.accent.withValues(
+                                              alpha: .17,
+                                            ),
+                                            palette.surface,
+                                          )
+                                          : palette.surface,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
                                     side: BorderSide(
                                       color:
                                           selected
-                                              ? colors.primary
-                                              : const Color(0xff527d7b),
+                                              ? palette.accent
+                                              : palette.accent.withValues(
+                                                alpha: .55,
+                                              ),
+                                      width: selected ? 2 : 1,
                                     ),
                                   ),
                                   clipBehavior: Clip.antiAlias,
@@ -584,9 +871,11 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                                             ),
                                           ),
                                           Text(
-                                            '${_score(board, word)}%',
+                                            _cardDetail(board, word),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
-                                              color: colors.primary,
+                                              color: palette.accent,
                                               fontSize: 11,
                                             ),
                                           ),
@@ -594,6 +883,16 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
                                       ),
                                     ),
                                   ),
+                                );
+                                return KeyedSubtree(
+                                  key: ValueKey(word),
+                                  child:
+                                      _impactWord == word && selected
+                                          ? _withSelectionImpact(
+                                            card,
+                                            palette.accent,
+                                          )
+                                          : card,
                                 );
                               },
                             ),

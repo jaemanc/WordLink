@@ -18,12 +18,14 @@ class CampaignProgress {
     this.discovered = const {},
     this.hiddenRecipes = const {},
     this.records = const {},
+    this.inferenceRecords = const {},
     this.rewardPoints = 0,
   });
 
   final Set<String> discovered;
   final Set<String> hiddenRecipes;
   final Map<int, StageRecord> records;
+  final Map<String, StageRecord> inferenceRecords;
   final int rewardPoints;
 
   factory CampaignProgress.fromJson(String text) {
@@ -45,6 +47,15 @@ class CampaignProgress {
             (entry.value as List)[1] as int,
           ),
       }),
+      inferenceRecords: Map.unmodifiable({
+        for (final entry
+            in (data['inferenceRecords'] as Map<String, dynamic>? ?? {})
+                .entries)
+          entry.key: StageRecord(
+            (entry.value as List)[0] as int,
+            (entry.value as List)[1] as int,
+          ),
+      }),
       rewardPoints: data['points'] as int? ?? 0,
     );
   }
@@ -55,6 +66,10 @@ class CampaignProgress {
     'records': {
       for (final entry in records.entries)
         '${entry.key}': [entry.value.moves, entry.value.stars],
+    },
+    'inferenceRecords': {
+      for (final entry in inferenceRecords.entries)
+        entry.key: [entry.value.moves, entry.value.stars],
     },
     'points': rewardPoints,
   });
@@ -98,6 +113,7 @@ class ProgressController extends AsyncNotifier<CampaignProgress> {
         discovered: Set.unmodifiable(discovered),
         hiddenRecipes: old.hiddenRecipes,
         records: old.records,
+        inferenceRecords: old.inferenceRecords,
         rewardPoints: old.rewardPoints,
       ),
     );
@@ -140,6 +156,7 @@ class ProgressController extends AsyncNotifier<CampaignProgress> {
               reward != 0
                   ? Set.unmodifiable({...old.hiddenRecipes, recipe!})
                   : old.hiddenRecipes,
+          inferenceRecords: old.inferenceRecords,
           rewardPoints: old.rewardPoints + reward,
           records:
               improved
@@ -154,11 +171,37 @@ class ProgressController extends AsyncNotifier<CampaignProgress> {
     return (isNew: isNew, reward: reward);
   }
 
+  bool recordInference(String key, int moves, int stars) {
+    final old = state.requireValue;
+    final best = old.inferenceRecords[key];
+    if (best != null && best.moves <= moves && best.stars >= stars) {
+      return false;
+    }
+    _save(
+      CampaignProgress(
+        discovered: old.discovered,
+        hiddenRecipes: old.hiddenRecipes,
+        records: old.records,
+        inferenceRecords: Map.unmodifiable({
+          ...old.inferenceRecords,
+          key: StageRecord(
+            best == null || moves < best.moves ? moves : best.moves,
+            best == null || stars > best.stars ? stars : best.stars,
+          ),
+        }),
+        rewardPoints: old.rewardPoints,
+      ),
+    );
+    return true;
+  }
+
   void _save(CampaignProgress next) {
     state = AsyncData(next);
     _writes = _writes.then((_) async {
       try {
         await _channel.invokeMethod<void>('setProgress', next.encode());
+      } on PlatformException {
+        // Keep this session usable if platform storage fails.
       } on MissingPluginException {
         // Non-mobile runners retain progress for the current session.
       }

@@ -17,12 +17,25 @@ class InferenceWord {
 }
 
 class InferenceBoard {
-  const InferenceBoard(this.target, this.starters, this.scores);
+  const InferenceBoard(
+    this.target,
+    this.starters,
+    this.scores,
+    this.minimumMoves,
+  );
   final int target;
   final List<int> starters;
   final List<int> scores;
+  final int minimumMoves;
 
   int proximity(int word) => scores[word];
+
+  int starsFor(int moves) =>
+      moves <= minimumMoves
+          ? 3
+          : moves <= minimumMoves + 2
+          ? 2
+          : 1;
 }
 
 class InferenceCatalog {
@@ -108,6 +121,12 @@ class InferenceCatalog {
   List<int> find(String word, bool korean) =>
       (korean ? _korean : _english)[_normalize(word)] ?? const [];
 
+  String recordKey(int difficulty, InferenceBoard board) => jsonEncode([
+    difficulty,
+    words[board.target].english,
+    board.starters.map((id) => words[id].english).toList()..sort(),
+  ]);
+
   Future<List<List<int>>> _loadPack(int difficulty) async {
     final cached = _packs[difficulty];
     if (cached != null) return cached;
@@ -142,11 +161,12 @@ class InferenceCatalog {
             .toList();
     while (candidates.isNotEmpty) {
       final chosen = candidates.removeAt(_random.nextInt(candidates.length));
+      if (chosen.length != handSize + 2 || chosen.last <= 0) continue;
       final target = chosen.first;
       final scores = _scores[target];
-      final starters = List<int>.unmodifiable(chosen.skip(1));
+      final starters = List<int>.unmodifiable(chosen.getRange(1, handSize + 1));
       if (scores != null && _canPlay(target, starters, scores)) {
-        return InferenceBoard(target, starters, scores);
+        return InferenceBoard(target, starters, scores, chosen.last);
       }
     }
     return null;

@@ -1,9 +1,20 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'game_language.dart';
 import 'models.dart';
+
+Future<void> playImpactSound({required bool cleared}) async {
+  try {
+    await const MethodChannel(
+      'wordlink/impact',
+    ).invokeMethod<void>('play', cleared);
+  } on MissingPluginException {
+    await SystemSound.play(SystemSoundType.click);
+  }
+}
 
 class CraftImpact extends StatelessWidget {
   const CraftImpact({
@@ -68,7 +79,12 @@ class CraftImpact extends StatelessWidget {
             if (progress >= collision && outcome != null) ...[
               Positioned.fill(
                 child: CustomPaint(
-                  painter: _Burst(center, t, hitColor, result != null),
+                  painter: ImpactBurstPainter(
+                    center,
+                    t,
+                    hitColor,
+                    result != null,
+                  ),
                 ),
               ),
               if (result != null)
@@ -167,16 +183,22 @@ class CraftImpact extends StatelessWidget {
   }
 }
 
-class _Burst extends CustomPainter {
-  const _Burst(this.center, this.progress, this.color, this.success);
+class ImpactBurstPainter extends CustomPainter {
+  const ImpactBurstPainter(
+    this.center,
+    this.progress,
+    this.color,
+    this.success,
+  );
 
-  final Offset center;
+  final Offset? center;
   final double progress;
   final Color color;
   final bool success;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final center = this.center ?? size.center(Offset.zero);
     final fade = 1 - progress;
     final distance = Curves.easeOutCubic.transform(progress);
     final radius = (success ? 152.0 : 64.0) * (.16 + .84 * distance);
@@ -219,7 +241,7 @@ class _Burst extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_Burst old) =>
+  bool shouldRepaint(ImpactBurstPainter old) =>
       center != old.center ||
       progress != old.progress ||
       color != old.color ||
