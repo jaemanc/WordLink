@@ -42,21 +42,29 @@ class InferenceCatalog {
     final json =
         jsonDecode(await rootBundle.loadString('assets/inference/engine.json'))
             as Map<String, dynamic>;
-    return InferenceCatalog._(
-      List.unmodifiable([
-        for (final row in (json['words'] as List).cast<List<dynamic>>())
-          InferenceWord(row[0] as String, row[1] as String),
-      ]),
-      {
-        for (final row in (json['recipes'] as List).cast<List<dynamic>>())
-          _key(row[0] as int, row[1] as int): row[2] as int,
-      },
-      {
-        for (final entry in (json['scores'] as Map<String, dynamic>).entries)
-          int.parse(entry.key): List<int>.unmodifiable(entry.value as List),
-      },
-      json['handSize'] as int,
-    );
+    final words = [
+      for (final row in (json['words'] as List).cast<List<dynamic>>())
+        InferenceWord(row[0] as String, row[1] as String),
+    ];
+    final recipes = <(int, int), int>{};
+    for (final row in (json['recipes'] as List).cast<List<dynamic>>()) {
+      if (row.length != 3 ||
+          row.any((id) => id is! int || id < 0 || id >= words.length)) {
+        throw FormatException('Invalid inference recipe: $row');
+      }
+      final a = row[0] as int;
+      final b = row[1] as int;
+      final result = row[2] as int;
+      final key = _key(a, b);
+      if (a == b || result == a || result == b || recipes.containsKey(key)) {
+        throw FormatException('Invalid inference recipe: $row');
+      }
+      recipes[key] = result;
+    }
+    return InferenceCatalog._(List.unmodifiable(words), recipes, {
+      for (final entry in (json['scores'] as Map<String, dynamic>).entries)
+        int.parse(entry.key): List<int>.unmodifiable(entry.value as List),
+    }, json['handSize'] as int);
   }
 
   static (int, int) _key(int a, int b) => a < b ? (a, b) : (b, a);

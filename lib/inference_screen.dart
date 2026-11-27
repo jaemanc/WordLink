@@ -18,8 +18,6 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
   Difficulty _difficulty = Difficulty.easy;
   final _available = <int>{};
   final _tray = <int>[];
-  final _samples = <({InferenceWord word, List<int> sources})>[];
-  final _sampleIds = <(int, int), int>{};
   final _selection = <int>[];
   final _history = <({List<int> inputs, int result})>[];
   String? _message;
@@ -76,8 +74,6 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
         _tray
           ..clear()
           ..addAll(board.starters);
-        _samples.clear();
-        _sampleIds.clear();
         _solved = false;
       });
     } catch (_) {
@@ -99,45 +95,9 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
     });
   }
 
-  InferenceWord _word(InferenceCatalog catalog, int id) =>
-      id >= 0 ? catalog.words[id] : _samples[-id - 1].word;
+  InferenceWord _word(InferenceCatalog catalog, int id) => catalog.words[id];
 
-  int _score(InferenceBoard board, int id) => id >= 0 ? board.proximity(id) : 4;
-
-  int _sample(InferenceCatalog catalog, int a, int b) {
-    final key = a < b ? (a, b) : (b, a);
-    return _sampleIds.putIfAbsent(key, () {
-      final sources =
-          {
-              for (final id in [a, b])
-                if (id >= 0) id else ..._samples[-id - 1].sources,
-            }.toList()
-            ..sort();
-      final shown = sources.take(3).map((id) => catalog.words[id]).toList();
-      final more = sources.length - shown.length;
-      final en = shown.map((word) => word.english).join(' + ');
-      final ko = shown.map((word) => word.korean).join('·');
-      final namesEn = '$en${more > 0 ? ' + $more' : ''}';
-      final namesKo = '$ko${more > 0 ? ' 외 $more종' : ''}';
-      final previous = [
-        for (final id in [a, b]) _word(catalog, id),
-      ];
-      final word = [
-        InferenceWord('$namesEn Set', '$namesKo 묶음'),
-        InferenceWord('$namesEn Material Pack', '$namesKo 재료 꾸러미'),
-        InferenceWord('$namesEn Collection', '$namesKo 재료 모음'),
-      ].firstWhere(
-        (candidate) =>
-            !previous.any(
-              (input) =>
-                  input.english == candidate.english ||
-                  input.korean == candidate.korean,
-            ),
-      );
-      _samples.add((word: word, sources: sources));
-      return -_samples.length;
-    });
-  }
+  int _score(InferenceBoard board, int id) => board.proximity(id);
 
   void _bringToTray(int limit, Iterable<int> words) {
     for (final word in words) {
@@ -151,7 +111,17 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
     if (_selection.length != 2 || _solved || _loading) return;
     final a = _selection[0];
     final b = _selection[1];
-    final result = catalog.recipeResult(a, b) ?? _sample(catalog, a, b);
+    final result = catalog.recipeResult(a, b);
+    if (result == null) {
+      setState(() {
+        _message = _tr(
+          '두 단어를 함께 설명하는 결과를 찾지 못했어요. 한 장을 바꿔 보세요.',
+          'No known result connects both words. Try swapping one card.',
+        );
+      });
+      HapticFeedback.lightImpact();
+      return;
+    }
     _record(result, List.unmodifiable(_selection), handSize: catalog.handSize);
   }
 
@@ -664,10 +634,6 @@ class _InferenceScreenState extends ConsumerState<InferenceScreen> {
   ) {
     String word(int id) => _word(catalog, id).label(_korean);
     final inputs = entry.inputs.map(word).join(' + ');
-    final experiment =
-        entry.inputs.isNotEmpty && entry.result < 0
-            ? _tr(' · 실험 결과', ' · Experiment')
-            : '';
-    return '${inputs.isEmpty ? '' : '$inputs → '}${word(entry.result)} · ${_score(board, entry.result)}%$experiment';
+    return '${inputs.isEmpty ? '' : '$inputs → '}${word(entry.result)} · ${_score(board, entry.result)}%';
   }
 }

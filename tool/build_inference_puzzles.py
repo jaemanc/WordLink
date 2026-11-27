@@ -6,10 +6,15 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
+from review_inference_recipes import validate_recipe_labels, verdict
+
 ASSETS = Path(__file__).resolve().parents[1] / "assets/inference"
 BOARDS_PER_LEVEL = 10_000
 HAND_SIZE = 16
 SCORES = (100, 88, 76, 64, 52, 43, 35, 28, 22, 17, 14, 12, 10)
+RELATION_RANK = {name: rank for rank, name in enumerate(
+    ("function", "physical", "purpose", "association")
+)}
 
 
 def bake():
@@ -24,23 +29,47 @@ def bake():
         edges[a][b] = min(weight, edges[a].get(b, weight))
         edges[b][a] = min(weight, edges[b].get(a, weight))
 
+    def add_recipe(pair, result):
+        a, b = pair
+        validate_recipe_labels(a, b, result)
+        validate_recipe_labels(words[a], words[b], words[result])
+        recipes[pair] = result
+        if result not in starter_words:
+            reverse[result].append(pair)
+        link(a, result, 1)
+        link(b, result, 1)
+
     for a, b, result, korean in data["recipes"]:
         pair = tuple(sorted((a, b)))
         if pair in recipes or result in words or not {a, b} <= words.keys():
             raise ValueError(f"Invalid or duplicate recipe: {pair} -> {result}")
         words[result] = korean
-        recipes[pair] = result
-        reverse[result].append(pair)
-        link(a, result, 1)
-        link(b, result, 1)
+        add_recipe(pair, result)
     for a, b, result in data["alternativeRecipes"]:
         pair = tuple(sorted((a, b)))
         if pair in recipes or result not in reverse or not {a, b} <= words.keys():
             raise ValueError(f"Invalid or duplicate alternative: {pair} -> {result}")
-        recipes[pair] = result
-        reverse[result].append(pair)
-        link(a, result, 1)
-        link(b, result, 1)
+        add_recipe(pair, result)
+
+    candidates = []
+    known_ingredients = set(words)
+    for entry in data["semanticRecipes"]:
+        a, b = entry["inputs"]
+        if a == b or not {a, b} <= known_ingredients:
+            raise ValueError(f"Invalid semantic recipe inputs: {entry['inputs']}")
+        pair = [(a, words[a]), (b, words[b])]
+        if verdict(entry, pair) != "approve":
+            continue
+        result, korean = entry["result"], entry["korean"]
+        priority = (RELATION_RANK[entry["relation"]], not entry["concrete"])
+        candidates.append((priority, tuple(sorted((a, b))), result, korean))
+
+    for _, pair, result, korean in sorted(candidates):
+        if pair in recipes:
+            continue
+        if words.setdefault(result, korean) != korean:
+            raise ValueError(f"Conflicting Korean label for {result}")
+        add_recipe(pair, result)
     for group in data["topics"]:
         for index, a in enumerate(group):
             for b in group[index + 1:]:
@@ -95,9 +124,9 @@ def bake():
         if len(nearby) < HAND_SIZE or not available_paths:
             continue
         moves = len(available_paths[0][1])
-        if moves < 2:
+        if not any(len(steps) >= 2 for _, steps in available_paths):
             continue
-        level = 0 if moves == 2 else 1 if moves == 3 else 2
+        level = 0 if moves <= 2 else 1 if moves == 3 else 2
         path_words = set().union(*(steps for _, steps in paths))
         traps = [
             (word, trap_inputs)
@@ -108,7 +137,7 @@ def bake():
         ]
         candidates = set()
         for needed, steps in available_paths:
-            if (0 if len(steps) == 2 else 1 if len(steps) == 3 else 2) != level:
+            if (0 if len(steps) <= 2 else 1 if len(steps) == 3 else 2) != level:
                 continue
             for trap, trap_inputs in traps:
                 combined = needed | trap_inputs
